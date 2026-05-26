@@ -1,0 +1,192 @@
+"use client";
+import * as React from "react";
+import { Check, Sparkles, Zap, Building2 } from "lucide-react";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { cn, formatTHB } from "@/lib/utils";
+
+type Cycle = "monthly" | "yearly";
+
+type Plan = {
+  code: string;
+  name: string;
+  tagline: string;
+  monthly: number;
+  yearly: number;
+  features: string[];
+  icon: React.ComponentType<{ className?: string }>;
+  popular?: boolean;
+};
+
+const plans: Plan[] = [
+  {
+    code: "starter",
+    name: "Starter",
+    tagline: "สำหรับ SME เริ่มต้น",
+    monthly: 990,
+    yearly: 9900,
+    icon: Sparkles,
+    features: [
+      "เอกสาร 50 ฉบับ/เดือน",
+      "วิเคราะห์ HS Code 200 ครั้ง",
+      "ผู้ใช้ 2 คน",
+      "ส่งออก PDF / Excel",
+      "Email support",
+    ],
+  },
+  {
+    code: "pro",
+    name: "Professional",
+    tagline: "ยอดนิยมสำหรับธุรกิจกลาง",
+    monthly: 2990,
+    yearly: 29900,
+    icon: Zap,
+    popular: true,
+    features: [
+      "เอกสาร 500 ฉบับ/เดือน",
+      "วิเคราะห์ HS Code 2,000 ครั้ง",
+      "ผู้ใช้ 10 คน",
+      "API Access + Webhook",
+      "Audit logs 1 ปี",
+      "Priority support",
+    ],
+  },
+  {
+    code: "enterprise",
+    name: "Enterprise",
+    tagline: "สำหรับองค์กรขนาดใหญ่",
+    monthly: 9990,
+    yearly: 99900,
+    icon: Building2,
+    features: [
+      "เอกสารไม่จำกัด",
+      "HS Code วิเคราะห์ไม่จำกัด",
+      "ผู้ใช้ไม่จำกัด",
+      "Dedicated server (TH region)",
+      "SLA 99.9% uptime",
+      "Custom integration",
+      "Account manager",
+    ],
+  },
+];
+
+export function PlanSelector({
+  selected,
+  onSelect,
+  cycle,
+  onCycleChange,
+}: {
+  selected: string;
+  onSelect: (code: string) => void;
+  cycle: Cycle;
+  onCycleChange: (c: Cycle) => void;
+}) {
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold">เลือกแพ็กเกจ</h2>
+          <p className="text-sm text-muted-foreground">
+            ปรับเปลี่ยนหรือยกเลิกได้ทุกเมื่อ
+          </p>
+        </div>
+        {/* Cycle toggle */}
+        <div className="inline-flex items-center rounded-lg border border-border bg-secondary p-0.5 text-sm">
+          <button
+            onClick={() => onCycleChange("monthly")}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-xs font-medium transition-all",
+              cycle === "monthly"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground"
+            )}
+          >
+            รายเดือน
+          </button>
+          <button
+            onClick={() => onCycleChange("yearly")}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-xs font-medium transition-all flex items-center gap-1.5",
+              cycle === "yearly"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground"
+            )}
+          >
+            รายปี
+            <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-400">
+              -17%
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        {plans.map((p) => {
+          const Icon = p.icon;
+          const price = cycle === "monthly" ? p.monthly : Math.round(p.yearly / 12);
+          const isSelected = selected === p.code;
+          return (
+            <Card
+              key={p.code}
+              onClick={() => onSelect(p.code)}
+              className={cn(
+                "relative cursor-pointer p-5 transition-all",
+                isSelected
+                  ? "border-primary ring-2 ring-primary/30 shadow-lg shadow-primary/10"
+                  : "hover:border-primary/40"
+              )}
+            >
+              {p.popular && (
+                <div className="absolute -top-2.5 left-1/2 -translate-x-1/2">
+                  <Badge className="bg-primary text-primary-foreground border-0">
+                    <Sparkles className="h-3 w-3" /> ยอดนิยม
+                  </Badge>
+                </div>
+              )}
+
+              {isSelected && (
+                <div className="absolute right-3 top-3">
+                  <div className="flex h-5 w-5 items-center justify-center rounded-full bg-primary">
+                    <Check className="h-3 w-3 text-primary-foreground" />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+                <Icon className="h-4 w-4 text-primary" />
+              </div>
+
+              <h3 className="mt-3 text-base font-semibold">{p.name}</h3>
+              <p className="text-xs text-muted-foreground">{p.tagline}</p>
+
+              <div className="mt-4 flex items-baseline gap-1.5">
+                <span className="text-2xl font-bold tabular-nums">
+                  {formatTHB(price)}
+                </span>
+                <span className="text-xs text-muted-foreground">/ เดือน</span>
+              </div>
+              {cycle === "yearly" && (
+                <p className="text-[11px] text-emerald-400 mt-0.5">
+                  เก็บปีละครั้ง {formatTHB(p.yearly)}
+                </p>
+              )}
+
+              <div className="my-4 h-px bg-border" />
+
+              <ul className="space-y-2">
+                {p.features.map((f) => (
+                  <li key={f} className="flex items-start gap-2 text-xs">
+                    <Check className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                    <span className="text-foreground/90">{f}</span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export { plans, type Plan, type Cycle };
