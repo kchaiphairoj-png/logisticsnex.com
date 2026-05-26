@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { classifyHsCode, type HsClassifyResult } from "@/lib/agents/hs-classifier";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import type { HsClassifyResult } from "@/lib/agents/hs-classifier";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
 const ItemSchema = z.object({
   item_description: z.string().min(1),
@@ -32,11 +32,9 @@ const BodySchema = z.union([
 ]);
 
 export async function POST(req: NextRequest) {
-  /* ─── AuthN/AuthZ ─────────────────────────────────────────
-   * Wire to your Supabase Auth middleware. The caller's user MUST be
-   * a member of the org that owns the document_item being classified.
-   * Sketch only — see /api/ai/extract for the same pattern.
-   */
+  // Dynamic imports — see /api/ai/extract for rationale
+  const { classifyHsCode } = await import("@/lib/agents/hs-classifier");
+  const { getSupabaseAdmin } = await import("@/lib/supabase-admin");
 
   let body: z.infer<typeof BodySchema>;
   try {
@@ -84,6 +82,7 @@ async function persistResults(
   items: z.infer<typeof ItemSchema>[],
   results: HsClassifyResult[]
 ) {
+  const { getSupabaseAdmin } = await import("@/lib/supabase-admin");
   const supabase = getSupabaseAdmin();
 
   let totalTokens = 0;

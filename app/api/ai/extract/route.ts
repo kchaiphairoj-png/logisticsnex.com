@@ -1,17 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { extractFromStorage } from "@/lib/agents/extractor";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const runtime = "nodejs";
-// Allow up to 60s — OpenAI vision on a multi-page PDF can be slow.
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
 const BodySchema = z.object({
   document_id: z.string().uuid(),
 });
 
 export async function POST(req: NextRequest) {
+  // Dynamic imports — keep agent/Supabase modules out of the build-time graph
+  // so missing OPENAI_API_KEY / SUPABASE_SERVICE_ROLE_KEY can't break the build.
+  const { extractFromStorage } = await import("@/lib/agents/extractor");
+  const { getSupabaseAdmin } = await import("@/lib/supabase-admin");
+
   /* ─── 1. AuthN/AuthZ ─────────────────────────────────────
    * Resolve the calling user, then look up the document and verify
    * the user belongs to that document's org. Bypassing RLS with the

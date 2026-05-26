@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { matchSuppliers } from "@/lib/agents/supplier-matcher";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
 const BodySchema = z.object({
   description: z.string().min(5),
@@ -26,9 +25,9 @@ const BodySchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  /* ─── AuthN/AuthZ ─────────────────────────────────────────
-   * Wire to your Supabase Auth middleware. Verify user belongs to org_id.
-   */
+  // Dynamic imports — see /api/ai/extract for rationale
+  const { matchSuppliers } = await import("@/lib/agents/supplier-matcher");
+  const { getSupabaseAdmin } = await import("@/lib/supabase-admin");
 
   let body: z.infer<typeof BodySchema>;
   try {
