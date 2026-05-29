@@ -248,11 +248,11 @@ create policy "anyone can read products"   on supplier_products for select using
 -- RFQs: org members can read their own, suppliers can read open RFQs in their categories.
 create policy "members read own org rfqs"
   on rfqs for select
-  using (org_id in (select auth.user_org_ids()));
+  using (org_id in (select public.user_org_ids()));
 
 create policy "members create rfqs for own org"
   on rfqs for insert
-  with check (org_id in (select auth.user_org_ids()));
+  with check (org_id in (select public.user_org_ids()));
 
 -- Quotes: visible to the RFQ's org and to the supplier who submitted.
 create policy "buyer org sees quotes on own rfqs"
@@ -261,14 +261,14 @@ create policy "buyer org sees quotes on own rfqs"
     exists (
       select 1 from rfqs r
       where r.id = quotes.rfq_id
-        and r.org_id in (select auth.user_org_ids())
+        and r.org_id in (select public.user_org_ids())
     )
   );
 
 -- Match logs: org-scoped audit trail.
 create policy "members see own match logs"
   on supplier_match_logs for select
-  using (org_id in (select auth.user_org_ids()));
+  using (org_id in (select public.user_org_ids()));
 
 -- ─────────────────────────────────────────────────────────────
 -- Vector match RPC for supplier discovery

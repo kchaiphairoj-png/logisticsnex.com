@@ -33,7 +33,15 @@ const items: NavItem[] = [
   { href: "/account", label: "บัญชีผู้ใช้", icon: UserCircle },
 ];
 
-export function Sidebar() {
+export interface SidebarUser {
+  full_name: string | null;
+  email: string;
+  initials: string;
+  org_name: string | null;
+  org_role: string | null;
+}
+
+export function Sidebar({ user }: { user?: SidebarUser }) {
   const pathname = usePathname();
   return (
     <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-border bg-card/60 backdrop-blur">
@@ -97,13 +105,26 @@ export function Sidebar() {
 
       {/* User panel */}
       <div className="border-t border-border p-3">
-        <div className="flex items-center gap-3 rounded-lg p-2 hover:bg-accent transition-colors cursor-pointer">
-          <Avatar fallback="ปท" />
+        <div className="flex items-center gap-3 rounded-lg p-2">
+          <Avatar fallback={user?.initials ?? "?"} />
           <div className="flex-1 min-w-0">
-            <p className="truncate text-sm font-medium">ปฏิกร ทวีสุข</p>
-            <p className="truncate text-xs text-muted-foreground">Pro Plan</p>
+            <p className="truncate text-sm font-medium">
+              {user?.full_name ?? user?.email ?? "ผู้ใช้"}
+            </p>
+            <p className="truncate text-xs text-muted-foreground">
+              {user?.org_name ?? "—"}
+              {user?.org_role && user.org_role !== "owner" && ` · ${user.org_role}`}
+            </p>
           </div>
-          <LogOut className="h-4 w-4 text-muted-foreground" />
+          <form action="/auth/sign-out" method="post">
+            <button
+              type="submit"
+              title="ออกจากระบบ"
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </form>
         </div>
       </div>
     </aside>

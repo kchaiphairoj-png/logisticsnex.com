@@ -1,15 +1,22 @@
 import { SummaryCards } from "@/components/dashboard/summary-cards";
 import { UploadDropzone } from "@/components/dashboard/upload-dropzone";
 import { RecentActivity } from "@/components/dashboard/recent-activity";
+import { getCurrentUser } from "@/lib/auth";
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const user = await getCurrentUser();
+  const firstName =
+    user?.full_name?.split(" ")[0] ??
+    user?.email?.split("@")[0] ??
+    "คุณ";
+
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       {/* Welcome */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">
-            สวัสดี, ปฏิกร <span className="text-muted-foreground font-normal">👋</span>
+            สวัสดี, {firstName} <span className="text-muted-foreground font-normal">👋</span>
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
             คุณมีเอกสารรอดำเนินการ <span className="text-primary font-medium">12 รายการ</span> วันนี้
