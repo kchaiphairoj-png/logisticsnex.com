@@ -45,12 +45,38 @@ export async function GET(request: NextRequest) {
     }
   );
 
-  const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+  const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
 
   if (exchangeError) {
     return NextResponse.redirect(
       `${origin}/sign-in?error=${encodeURIComponent(exchangeError.message)}`
     );
+  }
+
+  // First time the user has ever signed in? Create their org + profile.
+  // Safe to call on every login — `bootstrap_org_for_user` is idempotent.
+  if (data.user) {
+    const meta = (data.user.user_metadata ?? {}) as Record<string, unknown>;
+    const fullName =
+      (meta.full_name as string | undefined) ??
+      (meta.name as string | undefined) ??
+      data.user.email?.split("@")[0] ??
+      null;
+    const companyName = (meta.company_name as string | undefined) ?? null;
+
+    const { error: bootstrapError } = await supabase.rpc("bootstrap_org_for_user", {
+      p_user_id: data.user.id,
+      p_email: data.user.email!,
+      p_full_name: fullName,
+      p_company_name: companyName,
+    });
+
+    if (bootstrapError) {
+      // Don't block the redirect — just log. Dashboard will gracefully
+      // show "—" for org if bootstrap somehow fails, and the user can
+      // retry via /account.
+      console.error("[auth/callback] bootstrap_org_for_user failed:", bootstrapError);
+    }
   }
 
   // Don't let attackers redirect to external URLs

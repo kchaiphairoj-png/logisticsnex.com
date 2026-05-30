@@ -33,11 +33,33 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data: profile } = await supabase
+  let { data: profile } = await supabase
     .from("user_profiles")
     .select("full_name, avatar_url, default_org_id")
     .eq("id", user.id)
-    .single();
+    .maybeSingle();
+
+  // Safety net: bootstrap profile/org if the callback bootstrap was skipped
+  // (e.g. user existed before that code shipped). Cheap RPC, idempotent.
+  if (!profile) {
+    const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+    await supabase.rpc("bootstrap_org_for_user", {
+      p_user_id: user.id,
+      p_email: user.email!,
+      p_full_name:
+        (meta.full_name as string | undefined) ??
+        (meta.name as string | undefined) ??
+        user.email?.split("@")[0] ??
+        null,
+      p_company_name: (meta.company_name as string | undefined) ?? null,
+    });
+    const refetch = await supabase
+      .from("user_profiles")
+      .select("full_name, avatar_url, default_org_id")
+      .eq("id", user.id)
+      .maybeSingle();
+    profile = refetch.data;
+  }
 
   return {
     id: user.id,
