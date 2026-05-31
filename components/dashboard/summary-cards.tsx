@@ -1,5 +1,3 @@
-"use client";
-import * as React from "react";
 import {
   FileClock,
   Coins,
@@ -11,60 +9,81 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { formatTHB, cn } from "@/lib/utils";
 
-type Card = {
-  key: string;
-  label: string;
-  value: string;
-  delta?: { value: string; positive: boolean };
-  icon: React.ComponentType<{ className?: string }>;
-  accent: string;
-  iconBg: string;
-  footer?: React.ReactNode;
-};
+export interface SummaryCardsData {
+  pending_docs: number;
+  needs_review: number;
+  delta_pending: number;        // change vs yesterday
+  tax_total_thb: number;        // tax calculated this month
+  docs_count: number;           // total docs this month
+  tax_delta_pct: number;        // % change vs last month
+  ai_credits_left: number;
+  ai_credits_total: number;
+  ai_credits_reset_days: number;
+}
 
-export function SummaryCards() {
-  const cards: Card[] = [
+export function SummaryCards({ data }: { data: SummaryCardsData }) {
+  const cards = [
     {
       key: "pending",
       label: "เอกสารรอนุมัติ",
-      value: "12",
-      delta: { value: "+3 จากเมื่อวาน", positive: false },
+      value: data.pending_docs.toString(),
+      delta: data.delta_pending
+        ? {
+            value: `${data.delta_pending > 0 ? "+" : ""}${data.delta_pending} จากเมื่อวาน`,
+            positive: data.delta_pending < 0, // fewer pending = positive
+          }
+        : null,
       icon: FileClock,
       accent: "text-amber-400",
       iconBg: "from-amber-500/20 to-amber-500/5 ring-1 ring-amber-500/20",
-      footer: (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
-          5 เอกสารต้องตรวจมนุษย์
-        </div>
-      ),
+      footer:
+        data.needs_review > 0 ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+            {data.needs_review} เอกสารต้องตรวจมนุษย์
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground">ไม่มีเอกสารค้างตรวจ</div>
+        ),
     },
     {
       key: "tax",
       label: "ภาษีคำนวณเดือนนี้",
-      value: formatTHB(2_847_500),
-      delta: { value: "+18.2% เทียบเดือนก่อน", positive: true },
+      value: formatTHB(data.tax_total_thb),
+      delta:
+        data.tax_delta_pct !== 0
+          ? {
+              value: `${data.tax_delta_pct > 0 ? "+" : ""}${data.tax_delta_pct.toFixed(1)}% เทียบเดือนก่อน`,
+              positive: data.tax_delta_pct > 0,
+            }
+          : null,
       icon: Coins,
       accent: "text-emerald-400",
       iconBg: "from-emerald-500/20 to-emerald-500/5 ring-1 ring-emerald-500/20",
       footer: (
         <div className="text-xs text-muted-foreground">
-          จาก <span className="font-medium text-foreground">87</span> เอกสาร · พ.ค. 2568
+          จาก <span className="font-medium text-foreground">{data.docs_count}</span> เอกสาร · เดือนนี้
         </div>
       ),
     },
     {
       key: "credit",
       label: "เครดิต AI คงเหลือ",
-      value: "742",
-      delta: { value: "ของ 1,000 เครดิต", positive: true },
+      value: data.ai_credits_left.toLocaleString(),
+      delta: {
+        value: `ของ ${data.ai_credits_total.toLocaleString()} เครดิต`,
+        positive: true,
+      },
       icon: Sparkles,
       accent: "text-sky-400",
       iconBg: "from-sky-500/20 to-sky-500/5 ring-1 ring-sky-500/20",
       footer: (
         <div className="space-y-1.5">
-          <Progress value={74.2} indicatorClassName="bg-gradient-to-r from-sky-400 to-blue-500" />
-          <p className="text-xs text-muted-foreground">รีเซ็ตใน 12 วัน</p>
+          <Progress
+            value={(data.ai_credits_left / Math.max(1, data.ai_credits_total)) * 100}
+            indicatorClassName="bg-gradient-to-r from-sky-400 to-blue-500"
+          />
+          <p className="text-xs text-muted-foreground">รีเซ็ตใน {data.ai_credits_reset_days} วัน</p>
         </div>
       ),
     },
@@ -85,9 +104,7 @@ export function SummaryCards() {
                   <p className="text-sm font-medium text-muted-foreground">
                     {c.label}
                   </p>
-                  <p className="mt-2 text-3xl font-bold tracking-tight">
-                    {c.value}
-                  </p>
+                  <p className="mt-2 text-3xl font-bold tracking-tight">{c.value}</p>
                 </div>
                 <div
                   className={cn(
