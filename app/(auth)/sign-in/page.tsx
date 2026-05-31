@@ -60,15 +60,32 @@ export default function SignInPage() {
     setOauthLoading(provider);
     try {
       const supabase = createClient();
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
           redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextUrl)}`,
         },
       });
-      if (error) setError(error.message);
+      if (error) {
+        console.error("[OAuth] signInWithOAuth error:", error);
+        setError(translateOAuthError(error.message, provider));
+        setOauthLoading(null);
+        return;
+      }
+      if (!data?.url) {
+        setError(
+          `Supabase ไม่ได้คืน redirect URL — ตรวจสอบว่า provider "${provider}" ถูกเปิดใน Supabase Dashboard → Authentication → Providers`
+        );
+        setOauthLoading(null);
+        return;
+      }
+      // Manual redirect (Supabase normally does this, but make it explicit so we see what happens)
+      window.location.href = data.url;
     } catch (err) {
-      console.error(err);
+      console.error("[OAuth] unexpected:", err);
+      setError(
+        `เกิดข้อผิดพลาดที่ไม่คาดคิด: ${(err as Error).message ?? "ลองใหม่อีกครั้ง"}`
+      );
       setOauthLoading(null);
     }
   };
@@ -224,5 +241,22 @@ function translateAuthError(msg: string): string {
     return "พยายามเข้าสู่ระบบบ่อยเกินไป รอสักครู่แล้วลองใหม่";
   if (m.includes("network"))
     return "เชื่อมต่ออินเทอร์เน็ตไม่ได้";
+  return msg;
+}
+
+/**
+ * Map common OAuth provider setup errors to actionable Thai instructions.
+ */
+function translateOAuthError(msg: string, provider: string): string {
+  const m = msg.toLowerCase();
+  if (m.includes("provider is not enabled") || m.includes("unsupported provider")) {
+    return `Provider "${provider}" ยังไม่ถูกเปิดใน Supabase — ไป Dashboard → Authentication → Providers → ${provider} → Enable`;
+  }
+  if (m.includes("redirect") && m.includes("not allowed")) {
+    return `Redirect URL ไม่ถูกอนุญาต — เพิ่ม ${window.location.origin}/auth/callback ใน Supabase → Authentication → URL Configuration`;
+  }
+  if (m.includes("validation_failed")) {
+    return `Supabase config ของ ${provider} ไม่ครบ — ตรวจ Client ID / Client Secret`;
+  }
   return msg;
 }
