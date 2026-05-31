@@ -94,12 +94,38 @@ export default function NewRfqPage() {
       prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]
     );
 
-  const canContinue =
+  const canContinue: boolean =
     step === 1
       ? title.trim().length > 5 && description.trim().length > 20
       : step === 2
-      ? quantity && Number(quantity) > 0
+      ? Boolean(quantity) && Number(quantity) > 0
       : true;
+
+  // Scroll to top whenever the step changes so the user actually sees
+  // the new step's card (otherwise we keep their old scroll position
+  // and the change looks invisible).
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [step]);
+
+  // Block the form from submitting on Enter while the user is still in
+  // step 1 or 2. Without this, hitting Enter in any input field fires
+  // the Server Action — which sees half-filled state and rejects the RFQ.
+  const handleFormKeyDown = (e: React.KeyboardEvent<HTMLFormElement>) => {
+    if (
+      e.key === "Enter" &&
+      step < 3 &&
+      (e.target as HTMLElement).tagName !== "TEXTAREA"
+    ) {
+      e.preventDefault();
+    }
+  };
+
+  const goNext = () => {
+    if (canContinue) setStep((s) => Math.min(3, s + 1));
+  };
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -137,14 +163,19 @@ export default function NewRfqPage() {
           <React.Fragment key={s.n}>
             <button
               type="button"
-              onClick={() => setStep(s.n)}
+              onClick={() => {
+                // Allow jumping to a completed step or staying on current —
+                // but never forward past validation.
+                if (s.n <= step) setStep(s.n);
+              }}
+              disabled={s.n > step}
               className={cn(
                 "flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-all",
                 step === s.n
                   ? "border-primary bg-primary/10 text-primary"
                   : step > s.n
-                  ? "border-emerald-500/40 bg-emerald-500/5 text-emerald-400"
-                  : "border-border text-muted-foreground"
+                  ? "border-emerald-500/40 bg-emerald-500/5 text-emerald-400 cursor-pointer hover:bg-emerald-500/10"
+                  : "border-border text-muted-foreground cursor-not-allowed"
               )}
             >
               <span
@@ -185,7 +216,11 @@ export default function NewRfqPage() {
         </div>
       )}
 
-      <form action={formAction} className="grid gap-6 lg:grid-cols-3">
+      <form
+        action={formAction}
+        onKeyDown={handleFormKeyDown}
+        className="grid gap-6 lg:grid-cols-3"
+      >
         {/* Hidden state — sent with every submit */}
         <input type="hidden" name="title" value={title} />
         <input type="hidden" name="description" value={description} />
@@ -495,14 +530,26 @@ export default function NewRfqPage() {
               ย้อนกลับ
             </Button>
             {step < 3 ? (
-              <Button
-                type="button"
-                disabled={!canContinue}
-                onClick={() => setStep((s) => s + 1)}
-              >
-                ถัดไป
-                <ArrowRight className="h-4 w-4" />
-              </Button>
+              <div className="flex flex-col items-end gap-1">
+                <Button
+                  type="button"
+                  disabled={!canContinue}
+                  onClick={goNext}
+                  className={cn(
+                    !canContinue && "cursor-not-allowed opacity-50"
+                  )}
+                >
+                  ถัดไป
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+                {!canContinue && (
+                  <p className="text-[11px] text-amber-400">
+                    {step === 1
+                      ? "กรอก หัวข้อ + รายละเอียด (20+ ตัว) ให้ครบก่อน"
+                      : "ใส่ ปริมาณ > 0 ก่อน"}
+                  </p>
+                )}
+              </div>
             ) : (
               <SubmitButton />
             )}
@@ -519,7 +566,7 @@ export default function NewRfqPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {description.length < 20 ? (
+              {description.trim().length < 20 ? (
                 <p className="text-xs text-muted-foreground italic">
                   กรอกรายละเอียดเพิ่มเพื่อให้ AI แนะนำ HS Code และคำนวณอากร
                 </p>
