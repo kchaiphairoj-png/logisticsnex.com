@@ -4,83 +4,89 @@ import { Check, Sparkles, Zap, Building2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatTHB } from "@/lib/utils";
+import type { PlanCard } from "@/lib/queries/billing";
 
-type Cycle = "monthly" | "yearly";
+export type Cycle = "monthly" | "yearly";
 
-type Plan = {
-  code: string;
-  name: string;
-  tagline: string;
-  monthly: number;
-  yearly: number;
-  features: string[];
-  icon: React.ComponentType<{ className?: string }>;
-  popular?: boolean;
-};
-
-const plans: Plan[] = [
+/**
+ * Map a plan's code_root to its presentational metadata (icon, tagline,
+ * "popular" badge, and the feature bullets we want to show on the card).
+ *
+ * The features in the DB are a JSONB of capabilities (team_seats, api_access...);
+ * for marketing copy we still want a curated Thai bullet list, so we keep
+ * one here keyed by code_root.
+ */
+const PLAN_PRESENTATION: Record<
+  string,
   {
-    code: "starter",
-    name: "Starter",
+    tagline: string;
+    icon: React.ComponentType<{ className?: string }>;
+    popular?: boolean;
+    bullets: (p: PlanCard) => string[];
+  }
+> = {
+  starter: {
     tagline: "สำหรับ SME เริ่มต้น",
-    monthly: 990,
-    yearly: 9900,
     icon: Sparkles,
-    features: [
-      "เอกสาร 50 ฉบับ/เดือน",
-      "วิเคราะห์ HS Code 200 ครั้ง",
-      "ผู้ใช้ 2 คน",
+    bullets: (p) => [
+      `เอกสาร ${p.doc_quota.toLocaleString()} ฉบับ/เดือน`,
+      `วิเคราะห์ HS Code ${p.hs_lookup_quota.toLocaleString()} ครั้ง`,
+      `ผู้ใช้ ${p.features.team_seats ?? 2} คน`,
       "ส่งออก PDF / Excel",
       "Email support",
     ],
   },
-  {
-    code: "pro",
-    name: "Professional",
+  pro: {
     tagline: "ยอดนิยมสำหรับธุรกิจกลาง",
-    monthly: 2990,
-    yearly: 29900,
     icon: Zap,
     popular: true,
-    features: [
-      "เอกสาร 500 ฉบับ/เดือน",
-      "วิเคราะห์ HS Code 2,000 ครั้ง",
-      "ผู้ใช้ 10 คน",
-      "API Access + Webhook",
+    bullets: (p) => [
+      `เอกสาร ${p.doc_quota.toLocaleString()} ฉบับ/เดือน`,
+      `วิเคราะห์ HS Code ${p.hs_lookup_quota.toLocaleString()} ครั้ง`,
+      `ผู้ใช้ ${p.features.team_seats ?? 10} คน`,
+      ...(p.features.api_access ? ["API Access + Webhook"] : []),
       "Audit logs 1 ปี",
       "Priority support",
     ],
   },
-  {
-    code: "enterprise",
-    name: "Enterprise",
+  ent: {
     tagline: "สำหรับองค์กรขนาดใหญ่",
-    monthly: 9990,
-    yearly: 99900,
     icon: Building2,
-    features: [
+    bullets: (p) => [
       "เอกสารไม่จำกัด",
       "HS Code วิเคราะห์ไม่จำกัด",
       "ผู้ใช้ไม่จำกัด",
       "Dedicated server (TH region)",
-      "SLA 99.9% uptime",
+      `SLA ${p.features.sla ?? "99.9%"} uptime`,
       "Custom integration",
       "Account manager",
     ],
   },
-];
+};
+
+const DEFAULT_PRESENTATION = PLAN_PRESENTATION.pro;
 
 export function PlanSelector({
+  plans,
   selected,
   onSelect,
   cycle,
   onCycleChange,
 }: {
-  selected: string;
-  onSelect: (code: string) => void;
+  plans: PlanCard[];
+  selected: string;        // plan card's code_root
+  onSelect: (codeRoot: string) => void;
   cycle: Cycle;
   onCycleChange: (c: Cycle) => void;
 }) {
+  if (plans.length === 0) {
+    return (
+      <Card className="p-8 text-center text-sm text-muted-foreground">
+        ยังไม่มีแพ็กเกจในระบบ — ติดต่อทีมงานเพื่อสอบถาม
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -122,13 +128,17 @@ export function PlanSelector({
 
       <div className="grid gap-4 md:grid-cols-3">
         {plans.map((p) => {
-          const Icon = p.icon;
-          const price = cycle === "monthly" ? p.monthly : Math.round(p.yearly / 12);
-          const isSelected = selected === p.code;
+          const pres = PLAN_PRESENTATION[p.code_root] ?? DEFAULT_PRESENTATION;
+          const Icon = pres.icon;
+          const price =
+            cycle === "monthly"
+              ? p.monthly_price_thb
+              : Math.round(p.yearly_price_thb / 12);
+          const isSelected = selected === p.code_root;
           return (
             <Card
-              key={p.code}
-              onClick={() => onSelect(p.code)}
+              key={p.code_root}
+              onClick={() => onSelect(p.code_root)}
               className={cn(
                 "relative cursor-pointer p-5 transition-all",
                 isSelected
@@ -136,7 +146,7 @@ export function PlanSelector({
                   : "hover:border-primary/40"
               )}
             >
-              {p.popular && (
+              {pres.popular && (
                 <div className="absolute -top-2.5 left-1/2 -translate-x-1/2">
                   <Badge className="bg-primary text-primary-foreground border-0">
                     <Sparkles className="h-3 w-3" /> ยอดนิยม
@@ -157,7 +167,7 @@ export function PlanSelector({
               </div>
 
               <h3 className="mt-3 text-base font-semibold">{p.name}</h3>
-              <p className="text-xs text-muted-foreground">{p.tagline}</p>
+              <p className="text-xs text-muted-foreground">{pres.tagline}</p>
 
               <div className="mt-4 flex items-baseline gap-1.5">
                 <span className="text-2xl font-bold tabular-nums">
@@ -167,14 +177,14 @@ export function PlanSelector({
               </div>
               {cycle === "yearly" && (
                 <p className="text-[11px] text-emerald-400 mt-0.5">
-                  เก็บปีละครั้ง {formatTHB(p.yearly)}
+                  เก็บปีละครั้ง {formatTHB(p.yearly_price_thb)}
                 </p>
               )}
 
               <div className="my-4 h-px bg-border" />
 
               <ul className="space-y-2">
-                {p.features.map((f) => (
+                {pres.bullets(p).map((f) => (
                   <li key={f} className="flex items-start gap-2 text-xs">
                     <Check className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
                     <span className="text-foreground/90">{f}</span>
@@ -188,5 +198,3 @@ export function PlanSelector({
     </div>
   );
 }
-
-export { plans, type Plan, type Cycle };
