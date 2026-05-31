@@ -1,24 +1,27 @@
-"use client";
-import * as React from "react";
+/**
+ * /marketplace/suppliers/[id] — Server Component
+ *
+ * Fetches the supplier dossier + product catalog + reviews from Supabase.
+ * Public-read tables (suppliers, supplier_products) — no auth required.
+ */
 import Link from "next/link";
-import { notFound, useParams } from "next/navigation";
+import { notFound } from "next/navigation";
 import {
   ChevronRight,
   ShieldCheck,
   Star,
   MessageSquare,
   Send,
-  Globe,
   MapPin,
   Calendar,
   Users,
   Factory,
-  Package,
   Award,
   CheckCircle2,
   TrendingUp,
   Phone,
   Mail,
+  Globe,
   Building2,
   Lock,
 } from "lucide-react";
@@ -34,45 +37,45 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Avatar } from "@/components/ui/avatar";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { ProductCard } from "@/components/marketplace/supplier-card";
 import {
-  getSupplier,
+  getSupplierById,
   getSupplierProducts,
-  type Supplier,
-} from "@/lib/marketplace-data";
-import { cn, formatTHB } from "@/lib/utils";
+  getSupplierReviews,
+} from "@/lib/queries/marketplace";
+import { cn } from "@/lib/utils";
+import { getInitials } from "@/lib/auth";
 
-const reviewsMock = [
-  { author: "บจ. โซลาร์เอ็นเนอร์จี", initials: "ซน", rating: 5, date: "2 สัปดาห์ที่แล้ว", body: "สั่ง inverter 30 ตัว ได้ Form E ครบทุกใบ ลดอากรเหลือ 0% ประหยัดไปเกือบ ฿80,000 ทีมแอมี่ตอบเร็ว ส่งของตรงเวลา 19 วัน CIF Bangkok แนะนำเลย", reorder: true, quality: 5, communication: 5, delivery: 5 },
-  { author: "หจก. ระยองโซลูชั่น", initials: "รส", rating: 4, date: "1 เดือนที่แล้ว", body: "คุณภาพดี packaging แน่นหนา แต่รอบนี้ delay ไป 5 วันเพราะปัญหาการจองตู้ container ติดเทศกาลตรุษจีน", reorder: true, quality: 5, communication: 4, delivery: 3 },
-  { author: "บจ. กรีน เพาเวอร์", initials: "กพ", rating: 5, date: "2 เดือนที่แล้ว", body: "ทำงานด้วยมา 3 ครั้งแล้ว ไม่เคยมีปัญหา ของถึงทุกครั้ง batch ล่าสุดมี QC report ครบทุกตัว", reorder: true, quality: 5, communication: 5, delivery: 5 },
-];
+export const dynamic = "force-dynamic";
 
-export default function SupplierProfilePage() {
-  const params = useParams<{ id: string }>();
-  const supplier = getSupplier(params.id);
-
+export default async function SupplierProfilePage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  const supplier = await getSupplierById(params.id);
   if (!supplier) return notFound();
-  const products = getSupplierProducts(supplier.id);
+
+  const [products, reviews] = await Promise.all([
+    getSupplierProducts(supplier.id, 30),
+    getSupplierReviews(supplier.id, 20),
+  ]);
+
+  // Aggregate certifications across the supplier's products (DB stores them
+  // at the product level — display the union here).
+  const certifications = Array.from(
+    new Set(products.flatMap((p) => p.certifications))
+  ).sort();
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        <Link href="/marketplace" className="hover:text-foreground transition-colors">
+        <Link
+          href="/marketplace"
+          className="hover:text-foreground transition-colors"
+        >
           Marketplace
-        </Link>
-        <ChevronRight className="h-3.5 w-3.5" />
-        <Link href="/marketplace/suppliers" className="hover:text-foreground transition-colors">
-          Suppliers
         </Link>
         <ChevronRight className="h-3.5 w-3.5" />
         <span className="text-foreground truncate">{supplier.trade_name}</span>
@@ -80,14 +83,12 @@ export default function SupplierProfilePage() {
 
       {/* Hero */}
       <section className="overflow-hidden rounded-2xl border border-border">
-        {/* Banner gradient */}
         <div className="relative h-32 bg-gradient-to-br from-blue-600 via-blue-700 to-slate-900 lg:h-40">
-          <div className="absolute inset-0 bg-grid opacity-30" />
           <div className="absolute top-4 right-4 flex items-center gap-2">
             {supplier.is_verified && (
               <Badge className="bg-emerald-500 text-white border-0">
                 <ShieldCheck className="h-3 w-3" />
-                Verified {supplier.verified_by}
+                Verified {supplier.verified_by ?? ""}
               </Badge>
             )}
             {supplier.trade_assurance && (
@@ -99,7 +100,6 @@ export default function SupplierProfilePage() {
           </div>
         </div>
 
-        {/* Header content */}
         <div className="relative px-6 pb-6 lg:px-8">
           <div className="flex flex-wrap items-end justify-between gap-4 -mt-10">
             <div className="flex items-end gap-4">
@@ -115,17 +115,25 @@ export default function SupplierProfilePage() {
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1">
-                    <MapPin className="h-3 w-3" /> {supplier.city}, {supplier.country}
+                    <MapPin className="h-3 w-3" />
+                    {supplier.city ?? "—"}, {supplier.country}
                   </span>
-                  <span className="flex items-center gap-1">
-                    <Calendar className="h-3 w-3" /> ก่อตั้ง {supplier.established_year}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Users className="h-3 w-3" /> {supplier.staff_count} คน
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Factory className="h-3 w-3" /> {supplier.factory_size_sqm.toLocaleString()} ตร.ม.
-                  </span>
+                  {supplier.established_year && (
+                    <span className="flex items-center gap-1">
+                      <Calendar className="h-3 w-3" /> ก่อตั้ง {supplier.established_year}
+                    </span>
+                  )}
+                  {supplier.staff_count && (
+                    <span className="flex items-center gap-1">
+                      <Users className="h-3 w-3" /> {supplier.staff_count} คน
+                    </span>
+                  )}
+                  {supplier.factory_size_sqm && (
+                    <span className="flex items-center gap-1">
+                      <Factory className="h-3 w-3" />{" "}
+                      {supplier.factory_size_sqm.toLocaleString()} ตร.ม.
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -147,28 +155,44 @@ export default function SupplierProfilePage() {
           <div className="mt-6 grid gap-3 grid-cols-2 sm:grid-cols-4 border-t border-border pt-5">
             <Stat
               icon={Star}
-              value={supplier.rating.toFixed(1)}
+              value={supplier.rating > 0 ? supplier.rating.toFixed(1) : "—"}
               label={`${supplier.review_count} รีวิว`}
               hint="คะแนนจากผู้ซื้อจริง"
               accent="text-amber-400"
             />
             <Stat
               icon={MessageSquare}
-              value={`${supplier.response_rate.toFixed(0)}%`}
-              label={`ตอบใน ${supplier.response_hours_avg} ชม.`}
+              value={
+                supplier.response_rate
+                  ? `${Number(supplier.response_rate).toFixed(0)}%`
+                  : "—"
+              }
+              label={
+                supplier.response_hours_avg
+                  ? `ตอบใน ${supplier.response_hours_avg} ชม.`
+                  : "—"
+              }
               hint="อัตราการตอบกลับ"
               accent="text-blue-400"
             />
             <Stat
               icon={CheckCircle2}
-              value={`${supplier.on_time_delivery_rate.toFixed(0)}%`}
+              value={
+                supplier.on_time_delivery_rate
+                  ? `${supplier.on_time_delivery_rate.toFixed(0)}%`
+                  : "—"
+              }
               label="ส่งตรงเวลา"
               hint="6 เดือนล่าสุด"
               accent="text-emerald-400"
             />
             <Stat
               icon={TrendingUp}
-              value={`$${(supplier.export_volume_usd_yearly / 1_000_000).toFixed(1)}M`}
+              value={
+                supplier.export_volume_usd_yearly > 0
+                  ? `$${(supplier.export_volume_usd_yearly / 1_000_000).toFixed(1)}M`
+                  : "—"
+              }
               label="ส่งออกต่อปี"
               hint="self-declared"
               accent="text-sky-400"
@@ -178,14 +202,15 @@ export default function SupplierProfilePage() {
       </section>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Main column */}
         <div className="lg:col-span-2 space-y-6">
           <Tabs defaultValue="overview">
             <TabsList className="flex-wrap h-auto">
               <TabsTrigger value="overview">ภาพรวม</TabsTrigger>
               <TabsTrigger value="products">สินค้า ({products.length})</TabsTrigger>
-              <TabsTrigger value="reviews">รีวิว ({supplier.review_count})</TabsTrigger>
-              <TabsTrigger value="certifications">การรับรอง</TabsTrigger>
+              <TabsTrigger value="reviews">รีวิว ({reviews.length})</TabsTrigger>
+              <TabsTrigger value="certifications">
+                การรับรอง ({certifications.length})
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview" className="space-y-6">
@@ -194,31 +219,39 @@ export default function SupplierProfilePage() {
                   <CardTitle>เกี่ยวกับ {supplier.trade_name}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-5">
-                  <p className="text-sm leading-relaxed text-foreground/90">
-                    {supplier.description}
-                  </p>
-
-                  <Separator />
-
                   <div className="grid gap-4 sm:grid-cols-2">
                     <InfoRow label="หมวดสินค้าหลัก">
                       <div className="flex flex-wrap gap-1.5">
-                        {supplier.main_categories.map((c) => (
-                          <Badge key={c.hs_chapter} variant="outline" className="text-xs">
-                            {c.name} ({c.hs_chapter})
-                          </Badge>
-                        ))}
+                        {supplier.main_categories.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : (
+                          supplier.main_categories.map((c) => (
+                            <Badge
+                              key={c.hs_chapter}
+                              variant="outline"
+                              className="text-xs"
+                            >
+                              {c.name} ({c.hs_chapter})
+                            </Badge>
+                          ))
+                        )}
                       </div>
                     </InfoRow>
                     <InfoRow label="ตลาดหลัก">
-                      <p className="text-sm">{supplier.main_markets.join(" · ")}</p>
+                      <p className="text-sm">
+                        {supplier.main_markets.length > 0
+                          ? supplier.main_markets.join(" · ")
+                          : "—"}
+                      </p>
                     </InfoRow>
                     <InfoRow label="ท่าเรือต้นทาง">
-                      <p className="text-sm">{supplier.ships_from_port}</p>
+                      <p className="text-sm">{supplier.ships_from_port ?? "—"}</p>
                     </InfoRow>
                     <InfoRow label="ระยะเวลาส่งถึงไทย">
                       <p className="text-sm font-medium">
-                        {supplier.ships_to_thailand_days_min}–{supplier.ships_to_thailand_days_max} วัน (CIF Bangkok)
+                        {supplier.ships_to_thailand_days_min > 0
+                          ? `${supplier.ships_to_thailand_days_min}–${supplier.ships_to_thailand_days_max} วัน (CIF Bangkok)`
+                          : "—"}
                       </p>
                     </InfoRow>
                   </div>
@@ -261,7 +294,11 @@ export default function SupplierProfilePage() {
               ) : (
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {products.map((p) => (
-                    <ProductCard key={p.id} product={p} supplier={supplier} />
+                    <ProductCard
+                      key={p.id}
+                      product={p}
+                      supplier={supplier}
+                    />
                   ))}
                 </div>
               )}
@@ -278,7 +315,7 @@ export default function SupplierProfilePage() {
                   </div>
                   <div className="text-right">
                     <p className="text-2xl font-bold tabular-nums">
-                      {supplier.rating.toFixed(1)}
+                      {supplier.rating > 0 ? supplier.rating.toFixed(1) : "—"}
                     </p>
                     <div className="flex items-center gap-0.5">
                       {[1, 2, 3, 4, 5].map((i) => (
@@ -296,50 +333,90 @@ export default function SupplierProfilePage() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {reviewsMock.map((r, i) => (
-                    <div
-                      key={i}
-                      className="rounded-lg border border-border bg-secondary/30 p-4"
-                    >
-                      <div className="flex items-start gap-3">
-                        <Avatar fallback={r.initials} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-medium">{r.author}</p>
-                              <Badge variant="success" className="h-5">
-                                <CheckCircle2 className="h-3 w-3" />
-                                ซื้อจริง
-                              </Badge>
-                            </div>
-                            <span className="text-xs text-muted-foreground">
-                              {r.date}
-                            </span>
-                          </div>
-                          <div className="mt-1 flex items-center gap-0.5">
-                            {[1, 2, 3, 4, 5].map((i) => (
-                              <Star
-                                key={i}
-                                className={cn(
-                                  "h-3 w-3",
-                                  i <= r.rating ? "fill-amber-400 text-amber-400" : "text-muted-foreground"
+                  {reviews.length === 0 ? (
+                    <p className="py-6 text-center text-sm text-muted-foreground">
+                      ยังไม่มีรีวิว
+                    </p>
+                  ) : (
+                    reviews.map((r) => (
+                      <div
+                        key={r.id}
+                        className="rounded-lg border border-border bg-secondary/30 p-4"
+                      >
+                        <div className="flex items-start gap-3">
+                          <Avatar fallback={getInitials(r.org_name)} />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-medium">
+                                  {r.org_name ?? "ลูกค้านิรนาม"}
+                                </p>
+                                {r.verified_purchase && (
+                                  <Badge variant="success" className="h-5">
+                                    <CheckCircle2 className="h-3 w-3" />
+                                    ซื้อจริง
+                                  </Badge>
                                 )}
-                              />
-                            ))}
-                          </div>
-                          <p className="mt-2 text-sm leading-relaxed">{r.body}</p>
-                          <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
-                            <span>คุณภาพ: <b className="text-foreground">{r.quality}/5</b></span>
-                            <span>การสื่อสาร: <b className="text-foreground">{r.communication}/5</b></span>
-                            <span>การส่ง: <b className="text-foreground">{r.delivery}/5</b></span>
-                            {r.reorder && (
-                              <span className="text-emerald-400">✓ จะสั่งซ้ำ</span>
+                              </div>
+                              <span className="text-xs text-muted-foreground">
+                                {formatRelative(r.created_at)}
+                              </span>
+                            </div>
+                            <div className="mt-1 flex items-center gap-0.5">
+                              {[1, 2, 3, 4, 5].map((i) => (
+                                <Star
+                                  key={i}
+                                  className={cn(
+                                    "h-3 w-3",
+                                    i <= r.rating
+                                      ? "fill-amber-400 text-amber-400"
+                                      : "text-muted-foreground"
+                                  )}
+                                />
+                              ))}
+                            </div>
+                            {r.title && (
+                              <p className="mt-2 text-sm font-medium">{r.title}</p>
                             )}
+                            {r.body && (
+                              <p className="mt-1 text-sm leading-relaxed text-foreground/90">
+                                {r.body}
+                              </p>
+                            )}
+                            <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+                              {r.quality_rating != null && (
+                                <span>
+                                  คุณภาพ:{" "}
+                                  <b className="text-foreground">
+                                    {r.quality_rating}/5
+                                  </b>
+                                </span>
+                              )}
+                              {r.communication_rating != null && (
+                                <span>
+                                  การสื่อสาร:{" "}
+                                  <b className="text-foreground">
+                                    {r.communication_rating}/5
+                                  </b>
+                                </span>
+                              )}
+                              {r.delivery_rating != null && (
+                                <span>
+                                  การส่ง:{" "}
+                                  <b className="text-foreground">
+                                    {r.delivery_rating}/5
+                                  </b>
+                                </span>
+                              )}
+                              {r.would_reorder && (
+                                <span className="text-emerald-400">✓ จะสั่งซ้ำ</span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ))
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -349,40 +426,28 @@ export default function SupplierProfilePage() {
                 <CardHeader>
                   <CardTitle>ใบรับรองและมาตรฐาน</CardTitle>
                   <CardDescription>
-                    ใบรับรองที่ผ่านการตรวจสอบโดยทีม verification ของเรา
+                    รวมจากสินค้าทุกชิ้นใน catalog (
+                    {certifications.length} รายการ)
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="pl-6">การรับรอง</TableHead>
-                        <TableHead>หน่วยงานออก</TableHead>
-                        <TableHead>วันหมดอายุ</TableHead>
-                        <TableHead className="pr-6 text-right">เอกสาร</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {supplier.certifications.map((cert, i) => (
-                        <TableRow key={cert}>
-                          <TableCell className="pl-6">
-                            <Badge variant="outline" className="font-mono">
-                              {cert}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {["TÜV Rheinland","SGS","Bureau Veritas","Intertek","UL"][i % 5]}
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            {2026 + (i % 3)}-{String(((i * 3) % 12) + 1).padStart(2,"0")}-15
-                          </TableCell>
-                          <TableCell className="pr-6 text-right">
-                            <Button variant="ghost" size="sm">ดู PDF</Button>
-                          </TableCell>
-                        </TableRow>
+                  {certifications.length === 0 ? (
+                    <p className="py-6 text-center text-sm text-muted-foreground">
+                      ยังไม่มีข้อมูลการรับรอง
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {certifications.map((cert) => (
+                        <Badge
+                          key={cert}
+                          variant="outline"
+                          className="font-mono text-xs px-3 py-1"
+                        >
+                          {cert}
+                        </Badge>
                       ))}
-                    </TableBody>
-                  </Table>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -418,26 +483,39 @@ export default function SupplierProfilePage() {
                 />
               )}
               {supplier.whatsapp && (
-                <ContactRow icon={Phone} label="WhatsApp" value={supplier.whatsapp} />
+                <ContactRow
+                  icon={Phone}
+                  label="WhatsApp"
+                  value={supplier.whatsapp}
+                />
               )}
               {supplier.email && (
                 <ContactRow icon={Mail} label="Email" value={supplier.email} />
               )}
+              {supplier.website && (
+                <ContactRow
+                  icon={Globe}
+                  label="Website"
+                  value={supplier.website}
+                />
+              )}
 
               <Separator />
 
-              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <Lock className="h-3.5 w-3.5 text-amber-400" />
-                  <p className="text-xs font-medium text-amber-400">
-                    Trade Assurance
+              {supplier.trade_assurance && (
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Lock className="h-3.5 w-3.5 text-amber-400" />
+                    <p className="text-xs font-medium text-amber-400">
+                      Trade Assurance
+                    </p>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    เงินค้างใน escrow จนสินค้าตรวจรับเรียบร้อย — ป้องกันการสแกม
+                    หรือสินค้าไม่ตรงสเปก
                   </p>
                 </div>
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  เงินค้างใน escrow จนสินค้าตรวจรับเรียบร้อย — ป้องกันการสแกม
-                  หรือสินค้าไม่ตรงสเปก
-                </p>
-              </div>
+              )}
             </CardContent>
           </Card>
 
@@ -451,10 +529,30 @@ export default function SupplierProfilePage() {
               </div>
               <dl className="space-y-2 text-sm">
                 <KV k="ชื่อทางการ" v={supplier.legal_name} />
-                <KV k="ประเทศ" v={`${supplier.country_flag} ${supplier.country}`} />
-                <KV k="ก่อตั้ง" v={`${supplier.established_year} (${new Date().getFullYear() - supplier.established_year} ปี)`} />
-                <KV k="พนักงาน" v={`${supplier.staff_count} คน`} />
-                <KV k="พื้นที่โรงงาน" v={`${supplier.factory_size_sqm.toLocaleString()} ตร.ม.`} />
+                <KV
+                  k="ประเทศ"
+                  v={`${supplier.country_flag} ${supplier.country}`}
+                />
+                {supplier.established_year && (
+                  <KV
+                    k="ก่อตั้ง"
+                    v={`${supplier.established_year} (${
+                      new Date().getFullYear() - supplier.established_year
+                    } ปี)`}
+                  />
+                )}
+                {supplier.staff_count && (
+                  <KV k="พนักงาน" v={`${supplier.staff_count} คน`} />
+                )}
+                {supplier.factory_size_sqm && (
+                  <KV
+                    k="พื้นที่โรงงาน"
+                    v={`${supplier.factory_size_sqm.toLocaleString()} ตร.ม.`}
+                  />
+                )}
+                {supplier.business_license_no && (
+                  <KV k="License" v={supplier.business_license_no} />
+                )}
               </dl>
             </CardContent>
           </Card>
@@ -463,6 +561,10 @@ export default function SupplierProfilePage() {
     </div>
   );
 }
+
+/* ────────────────────────────────────────────────────────────
+ * Subcomponents
+ * ──────────────────────────────────────────────────────────── */
 
 function Stat({
   icon: Icon,
@@ -489,7 +591,13 @@ function Stat({
   );
 }
 
-function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
+function InfoRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
       <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -514,10 +622,16 @@ function FtaRow({
       <div
         className={cn(
           "flex h-9 w-9 items-center justify-center rounded-md",
-          supported ? "bg-emerald-500/15 text-emerald-400" : "bg-secondary text-muted-foreground"
+          supported
+            ? "bg-emerald-500/15 text-emerald-400"
+            : "bg-secondary text-muted-foreground"
         )}
       >
-        {supported ? <CheckCircle2 className="h-4 w-4" /> : <span className="text-xs">—</span>}
+        {supported ? (
+          <CheckCircle2 className="h-4 w-4" />
+        ) : (
+          <span className="text-xs">—</span>
+        )}
       </div>
       <div className="flex-1">
         <p className="text-sm font-medium">{label}</p>
@@ -564,4 +678,14 @@ function KV({ k, v }: { k: string; v: string }) {
       <dd className="text-xs font-medium text-right truncate">{v}</dd>
     </div>
   );
+}
+
+function formatRelative(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  if (days < 1) return "วันนี้";
+  if (days < 7) return `${days} วันที่แล้ว`;
+  if (days < 30) return `${Math.floor(days / 7)} สัปดาห์ที่แล้ว`;
+  if (days < 365) return `${Math.floor(days / 30)} เดือนที่แล้ว`;
+  return `${Math.floor(days / 365)} ปีที่แล้ว`;
 }

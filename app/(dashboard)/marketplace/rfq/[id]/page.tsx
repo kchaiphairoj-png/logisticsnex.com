@@ -1,6 +1,11 @@
-"use client";
-import * as React from "react";
+/**
+ * /marketplace/rfq/[id] — Server Component
+ *
+ * Shows a buyer their RFQ and the supplier quotes it received.
+ * RLS on `rfqs` restricts visibility to the org that owns it.
+ */
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import {
   ChevronRight,
   Star,
@@ -8,15 +13,11 @@ import {
   Clock,
   Package,
   MessageSquare,
-  CheckCircle2,
-  X,
   Award,
-  TrendingDown,
   Sparkles,
   Send,
   Calendar,
   Globe,
-  ArrowDownToLine,
 } from "lucide-react";
 import {
   Card,
@@ -25,456 +26,380 @@ import {
   CardTitle,
   CardDescription,
 } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Avatar } from "@/components/ui/avatar";
-import { suppliers, getSupplier } from "@/lib/marketplace-data";
+import { getRfqById, getQuotesForRfq } from "@/lib/queries/marketplace";
+import { requireUser } from "@/lib/auth";
 import { cn, formatTHB } from "@/lib/utils";
 
-// Mock RFQ
-const rfq = {
-  id: "rfq-new-001",
-  title: "Hybrid Solar Inverter 5kW + Form E",
-  description:
-    "ต้องการ hybrid solar inverter 5kW คลื่นไซน์บริสุทธิ์ สำหรับติดตั้งระบบ off-grid solar ในโครงการ กำลังจ่ายต่อเนื่อง 5,000W, peak 10,000W, รองรับแบตเตอรี่ลิเธียม 48V, มี LCD display, ต้องการประกัน 2 ปีขึ้นไป",
-  category: "Solar / พลังงาน",
-  hs_code: "8504.40.90",
-  quantity: 50,
-  unit: "pcs",
-  target_price_usd: 800,
-  preferred_origin: ["CN", "VN"],
-  required_certifications: ["CE", "RoHS"],
-  required_form_e: true,
-  incoterm: "CIF",
-  delivery_port: "THBKK",
-  needed_by: "2025-07-15",
-  status: "open",
-  expires_at: "2025-06-10",
-  posted_at: "2025-05-26 14:30",
-  view_count: 47,
-};
+export const dynamic = "force-dynamic";
 
-// Quotes from suppliers
-type Quote = {
-  id: string;
-  supplier_id: string;
-  unit_price_usd: number;
-  total_price_usd: number;
-  lead_time_days: number;
-  moq: number;
-  incoterm: string;
-  offers_form_e: boolean;
-  offers_form_rcep: boolean;
-  certifications: string[];
-  message: string;
-  valid_until: string;
-  status: "submitted" | "viewed" | "shortlisted";
-  match_score: number;
-  posted_at: string;
-};
+const USD_TO_THB = 36; // approximate; for landed cost display only
 
-const quotes: Quote[] = [
-  {
-    id: "q1",
-    supplier_id: "sup-001",
-    unit_price_usd: 760,
-    total_price_usd: 38_000,
-    lead_time_days: 22,
-    moq: 10,
-    incoterm: "CIF Bangkok",
-    offers_form_e: true,
-    offers_form_rcep: true,
-    certifications: ["CE", "RoHS", "FCC"],
-    message:
-      "เรามี hybrid inverter 5kW รุ่น HX-5000 ตรง spec ที่ระบุ คลื่นไซน์บริสุทธิ์ THD<3% รองรับ LiFePO4 48V พร้อม WiFi monitoring ฟรี ออก Form E ให้ครบทุก shipment ผลิตในโรงงาน Shenzhen เอง ขอใบ inspection report ได้ก่อนส่ง ราคาพิเศษสำหรับ MOQ 50+",
-    valid_until: "2025-06-15",
-    status: "viewed",
-    match_score: 0.94,
-    posted_at: "2 ชม.ที่แล้ว",
-  },
-  {
-    id: "q2",
-    supplier_id: "sup-006",
-    unit_price_usd: 720,
-    total_price_usd: 36_000,
-    lead_time_days: 28,
-    moq: 25,
-    incoterm: "CIF Bangkok",
-    offers_form_e: true,
-    offers_form_rcep: false,
-    certifications: ["CE", "RoHS"],
-    message:
-      "ราคาดีที่สุดในตลาด เป็น OEM brand-neutral สามารถ rebrand ให้ได้ฟรี ติด stick logo ของคุณได้ ส่งจาก Huangpu port",
-    valid_until: "2025-06-10",
-    status: "submitted",
-    match_score: 0.82,
-    posted_at: "5 ชม.ที่แล้ว",
-  },
-  {
-    id: "q3",
-    supplier_id: "sup-005",
-    unit_price_usd: 980,
-    total_price_usd: 49_000,
-    lead_time_days: 14,
-    moq: 20,
-    incoterm: "CIF Bangkok",
-    offers_form_e: false,
-    offers_form_rcep: true,
-    certifications: ["CE", "RoHS", "KR-Class"],
-    message:
-      "Premium grade inverter จากเกาหลี ใช้ Mitsubishi IGBT คุณภาพระดับ industrial ใช้ Form AK / RCEP แทน Form E ลดอากรเหลือ 5%",
-    valid_until: "2025-06-12",
-    status: "submitted",
-    match_score: 0.71,
-    posted_at: "1 วันที่แล้ว",
-  },
-  {
-    id: "q4",
-    supplier_id: "sup-003",
-    unit_price_usd: 690,
-    total_price_usd: 34_500,
-    lead_time_days: 35,
-    moq: 100,
-    incoterm: "FOB Haiphong",
-    offers_form_e: false,
-    offers_form_rcep: true,
-    certifications: ["CE"],
-    message:
-      "เราเป็น sub-assembly factory ราคาถูกที่สุด แต่ MOQ 100+ เท่านั้น ขายในระดับ FOB ลูกค้าต้องจัด freight เอง",
-    valid_until: "2025-06-08",
-    status: "submitted",
-    match_score: 0.55,
-    posted_at: "2 วันที่แล้ว",
-  },
-];
+export default async function RfqDetailPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  await requireUser(`/marketplace/rfq/${params.id}`);
+  const rfq = await getRfqById(params.id);
+  if (!rfq) return notFound();
 
-const sortedQuotes = [...quotes].sort((a, b) => b.match_score - a.match_score);
-const bestQuote = sortedQuotes[0];
-const cheapest = [...quotes].sort((a, b) => a.unit_price_usd - b.unit_price_usd)[0];
-const fastest = [...quotes].sort((a, b) => a.lead_time_days - b.lead_time_days)[0];
+  const quotes = await getQuotesForRfq(rfq.id);
 
-export default function RfqDetailPage() {
-  const [shortlist, setShortlist] = React.useState<string[]>([bestQuote.id]);
-
-  const toggleShortlist = (id: string) =>
-    setShortlist((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const cheapest = quotes.reduce<typeof quotes[number] | null>(
+    (best, q) => (best && best.unit_price_usd <= q.unit_price_usd ? best : q),
+    null
+  );
+  const fastest = quotes.reduce<typeof quotes[number] | null>(
+    (best, q) => (best && best.lead_time_days <= q.lead_time_days ? best : q),
+    null
+  );
+  const formESuppliers = quotes.filter((q) => q.offers_form_e).length;
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
+      {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        <Link href="/marketplace" className="hover:text-foreground transition-colors">
+        <Link
+          href="/marketplace"
+          className="hover:text-foreground transition-colors"
+        >
           Marketplace
         </Link>
         <ChevronRight className="h-3.5 w-3.5" />
-        <Link href="/marketplace/rfq" className="hover:text-foreground transition-colors">
-          RFQ
+        <Link
+          href="/marketplace/rfq"
+          className="hover:text-foreground transition-colors"
+        >
+          RFQ ของฉัน
         </Link>
         <ChevronRight className="h-3.5 w-3.5" />
         <span className="text-foreground truncate">{rfq.title}</span>
       </nav>
 
-      {/* RFQ summary header */}
-      <Card className="overflow-hidden">
-        <div className="border-b border-border bg-gradient-to-br from-blue-500/10 via-card to-card px-6 py-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Badge variant="info">เปิดรับใบเสนอ</Badge>
-                <Badge variant="outline" className="font-mono">{rfq.hs_code}</Badge>
+      {/* Header */}
+      <section className="rounded-2xl border border-border bg-card p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Badge
+                variant={rfq.status === "open" ? "success" : "outline"}
+                className="capitalize"
+              >
+                {rfq.status === "open" ? "เปิดรับ quotes" : rfq.status}
+              </Badge>
+              {rfq.category && (
                 <span className="text-xs text-muted-foreground">{rfq.category}</span>
-              </div>
-              <h1 className="mt-2 text-2xl font-bold tracking-tight">
-                {rfq.title}
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
-                {rfq.description}
-              </p>
+              )}
+              {rfq.hs_code_hint && (
+                <Badge variant="outline" className="font-mono text-[10px]">
+                  HS {rfq.hs_code_hint}
+                </Badge>
+              )}
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <Button variant="outline" size="sm">
-                <ArrowDownToLine className="h-3.5 w-3.5" />
-                Export PDF
-              </Button>
-              <Button variant="outline" size="sm">แก้ไข RFQ</Button>
-            </div>
+            <h1 className="text-2xl font-bold tracking-tight">{rfq.title}</h1>
+            <p className="text-xs text-muted-foreground">
+              โพสต์เมื่อ {formatThaiDateTime(rfq.created_at)}
+              {rfq.expires_at && ` · หมดอายุ ${formatThaiDate(rfq.expires_at)}`}
+            </p>
           </div>
-
-          <div className="mt-4 grid gap-3 grid-cols-2 sm:grid-cols-4 border-t border-border pt-4">
-            <RfqStat label="ปริมาณ" value={`${rfq.quantity} ${rfq.unit}`} icon={Package} />
-            <RfqStat label="ราคาเป้าหมาย" value={`$${rfq.target_price_usd}/pcs`} icon={TrendingDown} />
-            <RfqStat label="ต้องการภายใน" value={rfq.needed_by} icon={Calendar} />
-            <RfqStat label="ใบเสนอที่ได้รับ" value={`${quotes.length} ใบ`} icon={Send} />
+          <div className="text-right">
+            <p className="text-xs text-muted-foreground">ใบเสนอราคาที่ได้รับ</p>
+            <p className="text-3xl font-bold tabular-nums text-primary">
+              {quotes.length}
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              จากเปิดรับ {timeSince(rfq.created_at)}
+            </p>
           </div>
         </div>
-      </Card>
 
-      {/* AI Insight banner */}
-      <Card className="border-emerald-500/30 bg-emerald-500/5">
-        <CardContent className="p-5">
+        {/* Stats strip */}
+        <div className="mt-5 grid gap-3 grid-cols-2 sm:grid-cols-4 border-t border-border pt-5">
+          <Stat
+            label="จำนวนที่ต้องการ"
+            value={`${rfq.quantity.toLocaleString()} ${rfq.quantity_unit}`}
+          />
+          <Stat
+            label="ราคาเป้า"
+            value={rfq.target_price_usd ? `$${rfq.target_price_usd}/${rfq.quantity_unit}` : "ยังไม่ระบุ"}
+            accent="text-emerald-400"
+          />
+          <Stat
+            label="ต้องการภายใน"
+            value={rfq.needed_by_date ? formatThaiDate(rfq.needed_by_date) : "ยืดหยุ่น"}
+          />
+          <Stat
+            label="Incoterm / Port"
+            value={`${rfq.delivery_incoterm} ${rfq.delivery_port}`}
+          />
+        </div>
+      </section>
+
+      {/* AI insights */}
+      {quotes.length > 0 && (
+        <section className="rounded-xl border border-primary/30 bg-gradient-to-br from-blue-600/10 via-card to-card p-5">
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/20">
-              <Sparkles className="h-5 w-5 text-emerald-400" />
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/20">
+              <Sparkles className="h-4 w-4 text-primary" />
             </div>
             <div className="flex-1">
-              <p className="text-sm font-medium text-emerald-400">
-                AI Insight: คำแนะนำของระบบ
+              <p className="text-sm font-semibold mb-1">AI วิเคราะห์ Quotes</p>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                จาก {quotes.length} ใบเสนอราคาที่ได้รับ —{" "}
+                {cheapest && (
+                  <>
+                    <b className="text-foreground">{cheapest.supplier_trade_name}</b>{" "}
+                    ราคาดีที่สุด (${cheapest.unit_price_usd}/{rfq.quantity_unit}).
+                  </>
+                )}{" "}
+                {fastest && (
+                  <>
+                    <b className="text-foreground">{fastest.supplier_trade_name}</b>{" "}
+                    ส่งเร็วที่สุด ({fastest.lead_time_days} วัน).
+                  </>
+                )}{" "}
+                <b className="text-emerald-400">{formESuppliers} supplier</b>{" "}
+                เสนอ Form E (ลดอากรขาเข้าได้สูงสุด).
               </p>
-              <p className="mt-1 text-sm text-foreground/90 leading-relaxed">
-                <strong>{getSupplier(bestQuote.supplier_id)?.trade_name}</strong> เป็น match ที่ดีที่สุดด้วย score{" "}
-                <span className="text-emerald-400 font-semibold">{(bestQuote.match_score * 100).toFixed(0)}%</span> —
-                ราคา $760/pcs (สูงกว่าต่ำสุด 10%) แต่มี Form E + รับประกัน 2 ปี +
-                Trade Assurance + รีวิว 4.8 ดาว · ประหยัดอากรได้ประมาณ{" "}
-                <strong className="text-emerald-400">฿136,800</strong> เมื่อใช้ Form E
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button size="sm" variant="outline">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  ทำไม supplier นี้ดีที่สุด
-                </Button>
-                <Button size="sm" variant="outline">
-                  เปรียบเทียบ 3 quote แรก
-                </Button>
-              </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </section>
+      )}
 
-      {/* Quotes */}
-      <Tabs defaultValue="all">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <TabsList>
-            <TabsTrigger value="all">ทั้งหมด ({quotes.length})</TabsTrigger>
-            <TabsTrigger value="shortlist">
-              Shortlist ({shortlist.length})
-            </TabsTrigger>
-            <TabsTrigger value="compare">เปรียบเทียบ</TabsTrigger>
-          </TabsList>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span>เรียงตาม:</span>
-            <Badge variant="outline">AI Match Score ↓</Badge>
-          </div>
-        </div>
+      <div className="grid gap-6 lg:grid-cols-3">
+        {/* Main column */}
+        <div className="lg:col-span-2 space-y-6">
+          <Tabs defaultValue="quotes">
+            <TabsList>
+              <TabsTrigger value="quotes">Quotes ({quotes.length})</TabsTrigger>
+              <TabsTrigger value="details">รายละเอียด RFQ</TabsTrigger>
+            </TabsList>
 
-        <TabsContent value="all">
-          <div className="space-y-3">
-            {sortedQuotes.map((q) => (
-              <QuoteCard
-                key={q.id}
-                quote={q}
-                isShortlisted={shortlist.includes(q.id)}
-                onToggleShortlist={() => toggleShortlist(q.id)}
-                badges={{
-                  best: q.id === bestQuote.id,
-                  cheapest: q.id === cheapest.id,
-                  fastest: q.id === fastest.id,
-                }}
-              />
-            ))}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="shortlist">
-          {shortlist.length === 0 ? (
-            <Card>
-              <CardContent className="p-10 text-center text-sm text-muted-foreground">
-                ยังไม่มี quote ใน shortlist — กด ⭐ ใน quote ที่สนใจ
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="space-y-3">
-              {sortedQuotes
-                .filter((q) => shortlist.includes(q.id))
-                .map((q) => (
+            <TabsContent value="quotes" className="space-y-4">
+              {quotes.length === 0 ? (
+                <Card>
+                  <CardContent className="p-10 text-center space-y-2">
+                    <Sparkles className="mx-auto h-8 w-8 text-muted-foreground" />
+                    <p className="text-sm font-medium">
+                      ยังไม่มี supplier ส่ง quote เข้ามา
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      94% ของ RFQ ได้รับ quote ภายใน 24 ชม. —{" "}
+                      {timeSince(rfq.created_at)} ที่แล้ว
+                    </p>
+                  </CardContent>
+                </Card>
+              ) : (
+                quotes.map((q, idx) => (
                   <QuoteCard
                     key={q.id}
                     quote={q}
-                    isShortlisted
-                    onToggleShortlist={() => toggleShortlist(q.id)}
-                    badges={{}}
+                    rank={idx + 1}
+                    isCheapest={cheapest?.id === q.id}
+                    isFastest={fastest?.id === q.id}
                   />
-                ))}
-            </div>
-          )}
-        </TabsContent>
+                ))
+              )}
+            </TabsContent>
 
-        <TabsContent value="compare">
-          <CompareTable quotes={sortedQuotes.slice(0, 4)} />
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
-}
+            <TabsContent value="details">
+              <Card>
+                <CardHeader>
+                  <CardTitle>รายละเอียด RFQ ที่โพสต์</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                      คำอธิบาย
+                    </p>
+                    <p className="mt-1 text-sm leading-relaxed whitespace-pre-line">
+                      {rfq.description}
+                    </p>
+                  </div>
+                  <Separator />
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <KV label="ประเทศต้นทางที่ต้องการ">
+                      {rfq.preferred_origin.length > 0
+                        ? rfq.preferred_origin.join(", ")
+                        : "ไม่ระบุ"}
+                    </KV>
+                    <KV label="Form E / FTA จำเป็น">
+                      {rfq.required_form_e ? "ใช่" : "ไม่"}
+                      {rfq.required_form_rcep && " · Form RCEP"}
+                    </KV>
+                    <KV label="ใบรับรองที่ต้องการ">
+                      {rfq.required_certifications.length > 0
+                        ? rfq.required_certifications.join(", ")
+                        : "—"}
+                    </KV>
+                    <KV label="ต้องการตัวอย่าง">
+                      {rfq.sample_required ? "ใช่" : "ไม่"}
+                    </KV>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </div>
 
-function RfqStat({
-  label,
-  value,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  icon: React.ComponentType<{ className?: string }>;
-}) {
-  return (
-    <div>
-      <div className="flex items-center gap-1.5">
-        <Icon className="h-3 w-3 text-muted-foreground" />
-        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
+        {/* Sidebar */}
+        <div className="space-y-4">
+          <Card className="sticky top-20">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">การดำเนินการ</CardTitle>
+              <CardDescription className="text-xs">
+                ปิด RFQ เมื่อได้ supplier ที่ใช่
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Button className="w-full" size="sm" disabled>
+                <Award className="h-4 w-4" />
+                เลือก supplier (Award)
+              </Button>
+              <Button variant="outline" className="w-full" size="sm" disabled>
+                <Send className="h-4 w-4" />
+                ส่ง shortlist
+              </Button>
+              <Separator />
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                การ Award จะปิด RFQ และแจ้ง supplier ที่ไม่ได้รับเลือก
+                — ฟีเจอร์นี้กำลังพัฒนา
+              </p>
+            </CardContent>
+          </Card>
+        </div>
       </div>
-      <p className="mt-1 text-sm font-semibold tabular-nums">{value}</p>
     </div>
   );
 }
+
+/* ────────────────────────────────────────────────────────────
+ * Subcomponents
+ * ──────────────────────────────────────────────────────────── */
 
 function QuoteCard({
   quote,
-  isShortlisted,
-  onToggleShortlist,
-  badges,
+  rank,
+  isCheapest,
+  isFastest,
 }: {
-  quote: Quote;
-  isShortlisted: boolean;
-  onToggleShortlist: () => void;
-  badges: { best?: boolean; cheapest?: boolean; fastest?: boolean };
+  quote: Awaited<ReturnType<typeof getQuotesForRfq>>[number];
+  rank: number;
+  isCheapest: boolean;
+  isFastest: boolean;
 }) {
-  const supplier = getSupplier(quote.supplier_id);
-  if (!supplier) return null;
-
-  const matchColor =
-    quote.match_score >= 0.9
-      ? "text-emerald-400 bg-emerald-500/15"
-      : quote.match_score >= 0.7
-      ? "text-amber-400 bg-amber-500/15"
-      : "text-rose-400 bg-rose-500/15";
-
-  const savingsThb = Math.round(
-    rfq.quantity * quote.unit_price_usd * 36 * (quote.offers_form_e ? 0.1 : 0)
-  );
-
+  const totalThb = quote.total_price_usd * USD_TO_THB;
   return (
-    <Card className={cn(
-      "transition-all",
-      isShortlisted && "border-amber-500/40 bg-amber-500/[0.02]"
-    )}>
-      <CardContent className="p-5">
-        <div className="flex flex-wrap items-start gap-4">
-          {/* Supplier info */}
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500/20 to-blue-600/5 ring-1 ring-blue-500/30 text-xl">
-              {supplier.country_flag}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Link
-                  href={`/marketplace/suppliers/${supplier.id}`}
-                  className="text-sm font-semibold hover:text-primary"
-                >
-                  {supplier.trade_name}
-                </Link>
-                {supplier.is_verified && (
-                  <Badge variant="success" className="h-5">
-                    <ShieldCheck className="h-3 w-3" />
-                    Verified
-                  </Badge>
+    <Card className="overflow-hidden">
+      <div className="border-b border-border bg-secondary/30 px-5 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
+              #{rank}
+            </span>
+            <div>
+              <p className="text-sm font-semibold flex items-center gap-1.5">
+                <span>{quote.supplier_country_flag}</span>
+                {quote.supplier_trade_name}
+                {quote.supplier_is_verified && (
+                  <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
                 )}
-                {badges.best && (
-                  <Badge className="h-5 bg-emerald-500 text-white border-0">
-                    <Award className="h-3 w-3" />
-                    AI Best Match
-                  </Badge>
-                )}
-                {badges.cheapest && (
-                  <Badge className="h-5 bg-sky-500 text-white border-0">
-                    <TrendingDown className="h-3 w-3" />
-                    ราคาดีที่สุด
-                  </Badge>
-                )}
-                {badges.fastest && (
-                  <Badge className="h-5 bg-amber-500 text-white border-0">
-                    <Clock className="h-3 w-3" />
-                    ส่งเร็วที่สุด
-                  </Badge>
-                )}
-              </div>
-              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                <div className="flex items-center gap-0.5">
-                  <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                  <span>{supplier.rating.toFixed(1)}</span>
-                </div>
-                <span>·</span>
-                <span>{supplier.city}, {supplier.country}</span>
-                <span>·</span>
-                <span>เสนอราคา {quote.posted_at}</span>
-              </div>
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                ส่ง quote {timeSince(quote.created_at)} ที่แล้ว
+              </p>
             </div>
           </div>
-
-          {/* Match score */}
-          <div className={cn("flex flex-col items-center justify-center rounded-lg px-4 py-2", matchColor)}>
-            <p className="text-[10px] font-medium uppercase tracking-wider">AI Score</p>
-            <p className="text-xl font-bold tabular-nums">
-              {(quote.match_score * 100).toFixed(0)}%
-            </p>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center gap-1.5">
-            <Button
-              variant={isShortlisted ? "default" : "outline"}
-              size="icon"
-              onClick={onToggleShortlist}
-              className="h-9 w-9"
-            >
-              <Star className={cn("h-4 w-4", isShortlisted && "fill-current")} />
-            </Button>
-            <Button variant="outline" size="sm">
-              <MessageSquare className="h-3.5 w-3.5" />
-              Chat
-            </Button>
+          <div className="flex items-center gap-1">
+            {isCheapest && (
+              <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30">
+                ราคาดี
+              </Badge>
+            )}
+            {isFastest && (
+              <Badge className="bg-sky-500/15 text-sky-400 border-sky-500/30">
+                ส่งเร็ว
+              </Badge>
+            )}
+            {quote.match_score != null && (
+              <Badge variant="outline">
+                AI {Math.round(quote.match_score * 100)}%
+              </Badge>
+            )}
           </div>
         </div>
+      </div>
 
-        {/* Message */}
-        <div className="mt-4 rounded-lg bg-secondary/40 p-3">
-          <p className="text-sm leading-relaxed">{quote.message}</p>
-        </div>
-
-        {/* Numbers */}
-        <div className="mt-4 grid gap-3 grid-cols-2 sm:grid-cols-5 border-t border-border pt-4">
-          <QNumber label="ราคา / pcs" value={`$${quote.unit_price_usd}`} hint="USD" />
-          <QNumber label="ราคารวม" value={`$${quote.total_price_usd.toLocaleString()}`} hint={`MOQ ${quote.moq}`} />
-          <QNumber label="Lead time" value={`${quote.lead_time_days} วัน`} hint={quote.incoterm} />
-          <QNumber
-            label="Form E"
-            value={quote.offers_form_e ? "✓ มี" : "✗ ไม่มี"}
-            hint={quote.offers_form_e ? "ลด 10%" : quote.offers_form_rcep ? "มี RCEP" : "MFN เต็ม"}
-            valueColor={quote.offers_form_e ? "text-emerald-400" : "text-muted-foreground"}
+      <CardContent className="space-y-4 p-5">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Stat
+            label="ราคาต่อหน่วย"
+            value={`$${quote.unit_price_usd.toFixed(2)}`}
+            accent="text-emerald-400"
           />
-          <QNumber
-            label="ประหยัดอากร"
-            value={savingsThb > 0 ? formatTHB(savingsThb) : "—"}
-            hint="vs MFN"
-            valueColor={savingsThb > 0 ? "text-emerald-400" : "text-muted-foreground"}
+          <Stat
+            label="MOQ"
+            value={quote.moq.toLocaleString()}
+          />
+          <Stat
+            label="ยอดรวม"
+            value={`$${quote.total_price_usd.toLocaleString()}`}
+            hint={`≈ ${formatTHB(totalThb)}`}
+          />
+          <Stat
+            label="Lead time"
+            value={`${quote.lead_time_days} วัน`}
+            accent="text-sky-400"
+          />
+          <Stat
+            label="Incoterm / Port"
+            value={`${quote.incoterm} ${quote.ships_from_port ?? ""}`.trim()}
+          />
+          <Stat
+            label="หมดอายุ"
+            value={quote.valid_until ? formatThaiDate(quote.valid_until) : "—"}
           />
         </div>
 
-        {/* Certifications row */}
-        <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex flex-wrap gap-1">
-            {quote.certifications.map((c) => (
+        {quote.message && (
+          <div className="rounded-md bg-secondary/40 px-3 py-2 text-xs leading-relaxed">
+            {quote.message}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+          <div className="flex flex-wrap gap-1.5">
+            {quote.offers_form_e && (
+              <Badge variant="success">✓ Form E</Badge>
+            )}
+            {quote.offers_form_rcep && (
+              <Badge variant="success">✓ Form RCEP</Badge>
+            )}
+            {quote.certifications.slice(0, 4).map((c) => (
               <Badge key={c} variant="outline" className="text-[10px]">
-                ✓ {c}
+                {c}
               </Badge>
             ))}
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] text-muted-foreground">
-              ใช้ได้ถึง {quote.valid_until}
-            </span>
-            <Button size="sm">
-              ทำสัญญา / Award
+          <div className="flex gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/marketplace/suppliers/${quote.supplier_id}`}>
+                <Package className="h-3.5 w-3.5" />
+                ดูโปรไฟล์
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" disabled>
+              <MessageSquare className="h-3.5 w-3.5" />
+              ตอบกลับ
             </Button>
           </div>
         </div>
@@ -483,97 +408,69 @@ function QuoteCard({
   );
 }
 
-function QNumber({
+function Stat({
   label,
   value,
   hint,
-  valueColor,
+  accent,
 }: {
   label: string;
   value: string;
-  hint: string;
-  valueColor?: string;
+  hint?: string;
+  accent?: string;
 }) {
   return (
     <div>
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
         {label}
       </p>
-      <p className={cn("text-base font-bold tabular-nums mt-0.5", valueColor)}>
+      <p
+        className={cn(
+          "mt-0.5 text-sm font-semibold tabular-nums",
+          accent ?? "text-foreground"
+        )}
+      >
         {value}
       </p>
-      <p className="text-[10px] text-muted-foreground">{hint}</p>
+      {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
     </div>
   );
 }
 
-function CompareTable({ quotes }: { quotes: Quote[] }) {
-  const rows = [
-    { label: "ราคา/pcs (USD)", get: (q: Quote) => `$${q.unit_price_usd.toFixed(2)}` },
-    { label: "ราคารวม", get: (q: Quote) => `$${q.total_price_usd.toLocaleString()}` },
-    { label: "MOQ", get: (q: Quote) => `${q.moq} pcs` },
-    { label: "Lead time", get: (q: Quote) => `${q.lead_time_days} วัน` },
-    { label: "Incoterm", get: (q: Quote) => q.incoterm },
-    { label: "Form E", get: (q: Quote) => (q.offers_form_e ? "✓" : "✗") },
-    { label: "Form RCEP", get: (q: Quote) => (q.offers_form_rcep ? "✓" : "✗") },
-    { label: "Certifications", get: (q: Quote) => q.certifications.join(", ") },
-    { label: "AI Match", get: (q: Quote) => `${(q.match_score * 100).toFixed(0)}%` },
-  ];
-
+function KV({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <Card>
-      <CardContent className="p-0 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="border-b border-border">
-            <tr>
-              <th className="text-left py-3 px-4 text-xs font-medium uppercase tracking-wider text-muted-foreground sticky left-0 bg-card">
-                Criteria
-              </th>
-              {quotes.map((q) => {
-                const s = getSupplier(q.supplier_id);
-                return (
-                  <th key={q.id} className="text-left py-3 px-4">
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg">{s?.country_flag}</span>
-                      <div>
-                        <p className="text-sm font-medium">{s?.trade_name}</p>
-                        <div className="flex items-center gap-1 mt-0.5">
-                          <Star className="h-2.5 w-2.5 fill-amber-400 text-amber-400" />
-                          <span className="text-[10px] text-muted-foreground">
-                            {s?.rating.toFixed(1)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={r.label} className={cn("border-b border-border", i % 2 === 0 && "bg-secondary/20")}>
-                <td className="py-3 px-4 text-xs text-muted-foreground sticky left-0 bg-inherit">
-                  {r.label}
-                </td>
-                {quotes.map((q) => (
-                  <td key={q.id} className="py-3 px-4 text-sm font-medium tabular-nums">
-                    {r.get(q)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-            <tr>
-              <td className="py-3 px-4 sticky left-0 bg-card"></td>
-              {quotes.map((q) => (
-                <td key={q.id} className="py-3 px-4">
-                  <Button size="sm" className="w-full">Award</Button>
-                </td>
-              ))}
-            </tr>
-          </tbody>
-        </table>
-      </CardContent>
-    </Card>
+    <div>
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-1 text-sm">{children}</p>
+    </div>
   );
+}
+
+function formatThaiDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("th-TH", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatThaiDateTime(iso: string): string {
+  return new Date(iso).toLocaleString("th-TH", {
+    day: "2-digit",
+    month: "short",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function timeSince(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  if (hours < 1) return "ไม่ถึงชั่วโมง";
+  if (hours < 24) return `${hours} ชม.`;
+  const days = Math.floor(hours / 24);
+  return `${days} วัน`;
 }

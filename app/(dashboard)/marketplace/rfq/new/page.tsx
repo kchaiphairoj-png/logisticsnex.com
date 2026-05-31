@@ -1,7 +1,8 @@
 "use client";
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+import { useFormState, useFormStatus } from "react-dom";
 import {
   ChevronRight,
   Send,
@@ -11,8 +12,8 @@ import {
   ShieldCheck,
   Lightbulb,
   ArrowRight,
-  Plus,
   X,
+  AlertCircle,
 } from "lucide-react";
 import {
   Card,
@@ -30,25 +31,58 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { createRfq, type CreateRfqState } from "@/lib/actions/marketplace";
 
-const CERTS = ["CE", "FCC", "RoHS", "UN38.3", "FDA", "GMP", "ISO 9001", "IATF 16949", "OEKO-TEX"];
+const CERTS = [
+  "CE",
+  "FCC",
+  "RoHS",
+  "UN38.3",
+  "FDA",
+  "GMP",
+  "ISO 9001",
+  "IATF 16949",
+  "OEKO-TEX",
+];
+
+const ORIGIN_OPTIONS = [
+  { code: "CN", flag: "🇨🇳", name: "จีน" },
+  { code: "VN", flag: "🇻🇳", name: "เวียดนาม" },
+  { code: "KR", flag: "🇰🇷", name: "เกาหลี" },
+  { code: "JP", flag: "🇯🇵", name: "ญี่ปุ่น" },
+  { code: "IN", flag: "🇮🇳", name: "อินเดีย" },
+  { code: "ID", flag: "🇮🇩", name: "อินโด" },
+];
 
 export default function NewRfqPage() {
-  const router = useRouter();
+  const sp = useSearchParams();
+  const prefilledDesc = sp.get("desc") ?? "";
+  const prefilledOrigin = sp.get("origin");
+  const prefilledFormE = sp.get("form_e") === "1";
+
   const [step, setStep] = React.useState(1);
   const [title, setTitle] = React.useState("");
-  const [description, setDescription] = React.useState("");
+  const [description, setDescription] = React.useState(prefilledDesc);
   const [category, setCategory] = React.useState("");
   const [quantity, setQuantity] = React.useState("");
   const [unit, setUnit] = React.useState("pcs");
   const [targetPrice, setTargetPrice] = React.useState("");
-  const [origin, setOrigin] = React.useState<string[]>(["CN"]);
-  const [requireFormE, setRequireFormE] = React.useState(true);
+  const [origin, setOrigin] = React.useState<string[]>(
+    prefilledOrigin && prefilledOrigin !== "any" ? [prefilledOrigin] : ["CN"]
+  );
+  const [requireFormE, setRequireFormE] = React.useState<boolean>(
+    prefilledFormE || true
+  );
   const [incoterm, setIncoterm] = React.useState("CIF");
   const [port, setPort] = React.useState("THBKK");
   const [neededBy, setNeededBy] = React.useState("");
   const [sampleRequired, setSampleRequired] = React.useState(true);
   const [selectedCerts, setSelectedCerts] = React.useState<string[]>([]);
+
+  const [state, formAction] = useFormState<
+    CreateRfqState | undefined,
+    FormData
+  >(createRfq, undefined);
 
   const toggleCert = (c: string) =>
     setSelectedCerts((prev) =>
@@ -60,26 +94,21 @@ export default function NewRfqPage() {
       prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]
     );
 
-  const canContinue = step === 1
-    ? title.trim().length > 5 && description.trim().length > 20 && category
-    : step === 2
-    ? quantity && Number(quantity) > 0
-    : true;
-
-  const submit = () => {
-    // In production: POST /api/marketplace/rfqs → returns the new id
-    router.push("/marketplace/rfq/rfq-new-001");
-  };
+  const canContinue =
+    step === 1
+      ? title.trim().length > 5 && description.trim().length > 20
+      : step === 2
+      ? quantity && Number(quantity) > 0
+      : true;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <nav className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        <Link href="/marketplace" className="hover:text-foreground transition-colors">
+        <Link
+          href="/marketplace"
+          className="hover:text-foreground transition-colors"
+        >
           Marketplace
-        </Link>
-        <ChevronRight className="h-3.5 w-3.5" />
-        <Link href="/marketplace/rfq" className="hover:text-foreground transition-colors">
-          RFQ
         </Link>
         <ChevronRight className="h-3.5 w-3.5" />
         <span className="text-foreground">สร้าง RFQ ใหม่</span>
@@ -107,6 +136,7 @@ export default function NewRfqPage() {
         ].map((s, i, arr) => (
           <React.Fragment key={s.n}>
             <button
+              type="button"
               onClick={() => setStep(s.n)}
               className={cn(
                 "flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-all",
@@ -131,14 +161,62 @@ export default function NewRfqPage() {
               </span>
               {s.label}
             </button>
-            {i < arr.length - 1 && (
-              <div className="h-px w-6 bg-border" />
-            )}
+            {i < arr.length - 1 && <div className="h-px w-6 bg-border" />}
           </React.Fragment>
         ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      {/* Error banner */}
+      {state?.ok === false && state.message && (
+        <div className="flex items-start gap-2 rounded-md border border-rose-500/30 bg-rose-500/5 p-3 text-sm">
+          <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-rose-400 font-medium">{state.message}</p>
+            {state.fieldErrors && (
+              <ul className="mt-1 list-disc pl-4 text-xs text-rose-300">
+                {Object.entries(state.fieldErrors).map(([k, v]) => (
+                  <li key={k}>
+                    {k}: {v}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+
+      <form action={formAction} className="grid gap-6 lg:grid-cols-3">
+        {/* Hidden state — sent with every submit */}
+        <input type="hidden" name="title" value={title} />
+        <input type="hidden" name="description" value={description} />
+        <input type="hidden" name="category" value={category} />
+        <input type="hidden" name="quantity" value={quantity} />
+        <input type="hidden" name="quantity_unit" value={unit} />
+        <input type="hidden" name="target_price_usd" value={targetPrice} />
+        <input
+          type="hidden"
+          name="preferred_origin"
+          value={origin.join(",")}
+        />
+        <input
+          type="hidden"
+          name="required_certifications"
+          value={selectedCerts.join(",")}
+        />
+        <input
+          type="hidden"
+          name="required_form_e"
+          value={String(requireFormE)}
+        />
+        <input type="hidden" name="delivery_incoterm" value={incoterm} />
+        <input type="hidden" name="delivery_port" value={port} />
+        <input type="hidden" name="needed_by_date" value={neededBy} />
+        <input
+          type="hidden"
+          name="sample_required"
+          value={String(sampleRequired)}
+        />
+
         <div className="lg:col-span-2 space-y-6">
           {step === 1 && (
             <Card>
@@ -150,9 +228,9 @@ export default function NewRfqPage() {
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="space-y-1.5">
-                  <Label htmlFor="title">หัวข้อ RFQ</Label>
+                  <Label htmlFor="title-input">หัวข้อ RFQ</Label>
                   <Input
-                    id="title"
+                    id="title-input"
                     placeholder='เช่น "Hybrid Solar Inverter 5kW + Form E"'
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
@@ -182,9 +260,9 @@ export default function NewRfqPage() {
                   <Textarea
                     id="desc"
                     rows={5}
-                    placeholder="• Specification ที่ต้องการ (กำลังไฟ, ขนาด, สี, วัสดุ)
+                    placeholder={`• Specification ที่ต้องการ (กำลังไฟ, ขนาด, สี, วัสดุ)
 • Use case ที่จะใช้
-• สเปกที่ต้อง match กับสินค้าเก่า"
+• สเปกที่ต้อง match กับสินค้าเก่า`}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                   />
@@ -218,7 +296,11 @@ export default function NewRfqPage() {
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="unit">หน่วย</Label>
-                    <Select id="unit" value={unit} onChange={(e) => setUnit(e.target.value)}>
+                    <Select
+                      id="unit"
+                      value={unit}
+                      onChange={(e) => setUnit(e.target.value)}
+                    >
                       <option value="pcs">pcs</option>
                       <option value="set">set</option>
                       <option value="kg">kg</option>
@@ -265,18 +347,12 @@ export default function NewRfqPage() {
                 <div>
                   <Label>ประเทศต้นทางที่รับได้ (เลือกได้หลายอัน)</Label>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {[
-                      { code: "CN", flag: "🇨🇳", name: "จีน" },
-                      { code: "VN", flag: "🇻🇳", name: "เวียดนาม" },
-                      { code: "KR", flag: "🇰🇷", name: "เกาหลี" },
-                      { code: "JP", flag: "🇯🇵", name: "ญี่ปุ่น" },
-                      { code: "IN", flag: "🇮🇳", name: "อินเดีย" },
-                      { code: "ID", flag: "🇮🇩", name: "อินโด" },
-                    ].map((c) => {
+                    {ORIGIN_OPTIONS.map((c) => {
                       const active = origin.includes(c.code);
                       return (
                         <button
                           key={c.code}
+                          type="button"
                           onClick={() => toggleOrigin(c.code)}
                           className={cn(
                             "flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-all",
@@ -309,15 +385,25 @@ export default function NewRfqPage() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label htmlFor="ic">Incoterm</Label>
-                    <Select id="ic" value={incoterm} onChange={(e) => setIncoterm(e.target.value)}>
+                    <Select
+                      id="ic"
+                      value={incoterm}
+                      onChange={(e) => setIncoterm(e.target.value)}
+                    >
                       {["EXW", "FOB", "CFR", "CIF", "DAP", "DDP"].map((i) => (
-                        <option key={i} value={i}>{i}</option>
+                        <option key={i} value={i}>
+                          {i}
+                        </option>
                       ))}
                     </Select>
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="port">ท่าเรือ/สนามบินปลายทาง</Label>
-                    <Select id="port" value={port} onChange={(e) => setPort(e.target.value)}>
+                    <Select
+                      id="port"
+                      value={port}
+                      onChange={(e) => setPort(e.target.value)}
+                    >
                       <option value="THBKK">Bangkok (THBKK)</option>
                       <option value="THLCH">Laem Chabang (THLCH)</option>
                       <option value="THBKK-AIR">Suvarnabhumi (THBKK)</option>
@@ -356,6 +442,7 @@ export default function NewRfqPage() {
                       return (
                         <button
                           key={c}
+                          type="button"
                           onClick={() => toggleCert(c)}
                           className={cn(
                             "rounded-md border px-2.5 py-1 text-xs transition-all",
@@ -364,7 +451,8 @@ export default function NewRfqPage() {
                               : "border-border hover:bg-accent text-muted-foreground"
                           )}
                         >
-                          {active && "✓ "}{c}
+                          {active && "✓ "}
+                          {c}
                         </button>
                       );
                     })}
@@ -377,6 +465,7 @@ export default function NewRfqPage() {
           {/* Step navigation */}
           <div className="flex items-center justify-between">
             <Button
+              type="button"
               variant="outline"
               disabled={step === 1}
               onClick={() => setStep((s) => s - 1)}
@@ -385,6 +474,7 @@ export default function NewRfqPage() {
             </Button>
             {step < 3 ? (
               <Button
+                type="button"
                 disabled={!canContinue}
                 onClick={() => setStep((s) => s + 1)}
               >
@@ -392,10 +482,7 @@ export default function NewRfqPage() {
                 <ArrowRight className="h-4 w-4" />
               </Button>
             ) : (
-              <Button onClick={submit}>
-                <Send className="h-4 w-4" />
-                ส่ง RFQ ไปยัง suppliers
-              </Button>
+              <SubmitButton />
             )}
           </div>
         </div>
@@ -421,10 +508,10 @@ export default function NewRfqPage() {
                       HS Code แนะนำ
                     </p>
                     <Badge variant="outline" className="mt-1 font-mono">
-                      8504.40.90
+                      AI จะ classify ตอนสร้าง
                     </Badge>
                     <p className="mt-1 text-[11px] text-muted-foreground">
-                      ความมั่นใจ 91% · เครื่องเปลี่ยนกระแสไฟฟ้าแบบสถิต
+                      ระบบจะคำนวณอากรอัตโนมัติเมื่อ RFQ ถูกสร้าง
                     </p>
                   </div>
 
@@ -433,7 +520,7 @@ export default function NewRfqPage() {
                   <div className="space-y-1.5 text-xs">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">อากร MFN ปกติ</span>
-                      <span className="font-medium">10%</span>
+                      <span className="font-medium">~10%</span>
                     </div>
                     {requireFormE && (
                       <div className="flex justify-between">
@@ -447,7 +534,7 @@ export default function NewRfqPage() {
                     </div>
                   </div>
 
-                  {targetPrice && quantity && (
+                  {targetPrice && quantity && requireFormE && (
                     <>
                       <Separator />
                       <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-2.5">
@@ -455,7 +542,10 @@ export default function NewRfqPage() {
                           ประหยัดถ้าใช้ Form E
                         </p>
                         <p className="mt-0.5 text-lg font-bold text-emerald-400 tabular-nums">
-                          ฿{Math.round(Number(quantity) * Number(targetPrice) * 36 * 0.1).toLocaleString()}
+                          ฿
+                          {Math.round(
+                            Number(quantity) * Number(targetPrice) * 36 * 0.1
+                          ).toLocaleString()}
                         </p>
                       </div>
                     </>
@@ -488,8 +578,18 @@ export default function NewRfqPage() {
             </CardContent>
           </Card>
         </div>
-      </div>
+      </form>
     </div>
+  );
+}
+
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" disabled={pending}>
+      <Send className="h-4 w-4" />
+      {pending ? "กำลังส่ง..." : "ส่ง RFQ ไปยัง suppliers"}
+    </Button>
   );
 }
 
