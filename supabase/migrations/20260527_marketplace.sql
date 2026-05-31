@@ -48,7 +48,7 @@ create table suppliers (
   review_count    int default 0,
 
   -- For embedding-based discovery
-  embedding       vector(1536),
+  embedding       vector(768),
 
   created_at      timestamptz default now(),
   updated_at      timestamptz default now()
@@ -96,7 +96,7 @@ create table supplier_products (
   has_brand_authorization boolean default false,
 
   -- Discovery
-  embedding       vector(1536),
+  embedding       vector(768),
   total_sold_units int default 0,
   view_count      int default 0,
 
@@ -141,7 +141,7 @@ create table rfqs (
   expires_at      timestamptz,
   awarded_quote_id uuid,                          -- FK set after awarding
 
-  embedding       vector(1536),
+  embedding       vector(768),
   created_at      timestamptz default now(),
   updated_at      timestamptz default now()
 );
@@ -273,7 +273,7 @@ create policy "members see own match logs"
 -- ─────────────────────────────────────────────────────────────
 -- Vector match RPC for supplier discovery
 create or replace function match_suppliers(
-  query_embedding vector(1536),
+  query_embedding vector(768),
   match_count int default 10,
   country_filter text default null,
   require_form_e boolean default false
@@ -313,7 +313,7 @@ $$;
 
 -- Vector match for supplier *products* — used when buyer's RFQ is product-specific.
 create or replace function match_supplier_products(
-  query_embedding vector(1536),
+  query_embedding vector(768),
   match_count int default 15,
   country_filter text default null
 )

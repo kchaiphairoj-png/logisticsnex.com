@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { zodResponseFormat } from "openai/helpers/zod";
-import { openai, EXTRACT_MODEL } from "@/lib/openai";
+import { generateObject, NoObjectGeneratedError } from "ai";
+import { extractModel } from "@/lib/ai";
 import { getSupabaseAdmin, DOC_BUCKET } from "@/lib/supabase-admin";
 
 /* ────────────────────────────────────────────────────────────
@@ -29,42 +29,25 @@ export const InvoiceItemSchema = z.object({
 });
 
 export const ExtractedInvoiceSchema = z.object({
-  shipper_name: z
-    .string()
-    .nullable()
-    .describe("Seller / exporter name. null if not legible."),
-  consignee_name: z
-    .string()
-    .nullable()
-    .describe("Buyer in Thailand. null if not legible."),
+  shipper_name: z.string().nullable().describe("Seller / exporter name. null if not legible."),
+  consignee_name: z.string().nullable().describe("Buyer in Thailand. null if not legible."),
   invoice_number: z.string().nullable(),
   invoice_date: z
     .string()
     .nullable()
     .describe("ISO 8601 date (YYYY-MM-DD). null if unreadable."),
-  currency: z
-    .string()
-    .nullable()
-    .describe('ISO 4217 currency code, e.g. "USD". null if unclear.'),
+  currency: z.string().nullable().describe('ISO 4217 currency code, e.g. "USD". null if unclear.'),
   total_amount: z.number().nullable(),
   items: z.array(InvoiceItemSchema),
-  /**
-   * AI's own self-rated confidence 0..1. Used to short-circuit
-   * to `failed_to_parse` when the model itself is uncertain.
-   */
-  ai_confidence: z.number().min(0).max(1),
-  /**
-   * If the model believes the document is not an invoice, set true.
-   * Lets us avoid garbage-in pipelines (e.g. user uploaded a selfie).
-   */
-  not_an_invoice: z.boolean(),
+  ai_confidence: z.number().min(0).max(1).describe("Self-rated 0..1. <0.4 = stop."),
+  not_an_invoice: z.boolean().describe("True if document is clearly not a commercial invoice."),
 });
 
 export type InvoiceItem = z.infer<typeof InvoiceItemSchema>;
 export type ExtractedInvoice = z.infer<typeof ExtractedInvoiceSchema>;
 
 /* ────────────────────────────────────────────────────────────
- * Result discriminated union (no exceptions across boundaries)
+ * Result type
  * ──────────────────────────────────────────────────────────── */
 
 export type ExtractFailureReason =
@@ -79,60 +62,41 @@ export type ExtractFailureReason =
   | "low_confidence"
   | "unknown_error";
 
+export interface ExtractMeta {
+  model: string;
+  latency_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
 export type ExtractResult =
-  | {
-      status: "success";
-      data: ExtractedInvoice;
-      meta: {
-        model: string;
-        prompt_tokens: number;
-        completion_tokens: number;
-        latency_ms: number;
-      };
-    }
+  | { status: "success"; data: ExtractedInvoice; meta: ExtractMeta }
   | {
       status: "failed_to_parse";
       reason: ExtractFailureReason;
       message: string;
       retryable: boolean;
-      meta?: Partial<{
-        model: string;
-        prompt_tokens: number;
-        completion_tokens: number;
-        latency_ms: number;
-      }>;
+      meta?: Partial<ExtractMeta>;
     };
 
 /* ────────────────────────────────────────────────────────────
- * Prompts
+ * Prompt
  * ──────────────────────────────────────────────────────────── */
 
 const SYSTEM_PROMPT = `You are an expert Thai customs broker assistant.
 Given a commercial invoice image or PDF for goods being imported into Thailand,
-extract the structured data per the JSON schema. Follow these rules strictly:
+extract the structured data per the JSON schema. Rules:
 
 1. NEVER invent values. If a field is unreadable, set it to null.
-2. Numeric fields must be parsed as numbers (not strings). Remove thousand separators.
-3. "country_of_origin" must be an ISO-3166 alpha-2 code (CN, JP, KR, VN, etc.),
-   not the country name. Infer from the address or "Made in" if explicit
-   "Country of Origin" column is missing. If genuinely unclear, set null.
-4. "invoice_date" must be ISO 8601 (YYYY-MM-DD). Reinterpret formats like
-   "15/05/2025" or "May 15, 2025" or "2568-05-15" (Buddhist year) accordingly.
-   Treat 4-digit years 2500-2600 as Buddhist Era and convert to CE (subtract 543).
-5. For "items", include ONE row per line item on the invoice. Do NOT merge.
-   If quantity·unit_price ≠ total_price, prefer what the document literally shows.
-6. "ai_confidence": rate your own certainty 0..1 conservatively.
-   - 1.0 = crisp scan, every field unambiguous
-   - 0.7 = readable but a few fields inferred
-   - 0.5 = partially smudged / handwritten / low resolution
-   - <0.4 = mostly guessing — set this and stop.
-7. "not_an_invoice": true if the document is clearly something else
-   (passport, photo, blank page, AWB, etc.). Still attempt fields where possible
-   but set this flag.`;
+2. Numeric fields must be parsed as numbers. Remove thousand separators.
+3. "country_of_origin" must be ISO-3166 alpha-2 (CN, JP, KR, VN, ...). Infer from address or "Made in" if no explicit column.
+4. "invoice_date" must be ISO 8601 (YYYY-MM-DD). Convert Buddhist Era years (2500-2600) to CE by subtracting 543.
+5. "items" — one row per line item, do NOT merge.
+6. "ai_confidence" 0..1, conservative.
+7. "not_an_invoice": true if the document is clearly not a commercial invoice.`;
 
 const USER_PROMPT = `Extract the invoice data from the attached document.
-Reply with JSON ONLY matching the provided schema.
-If the document is illegible, set ai_confidence below 0.4 and leave fields null.`;
+If illegible, set ai_confidence below 0.4 and leave fields null.`;
 
 /* ────────────────────────────────────────────────────────────
  * Public entry points
@@ -149,25 +113,12 @@ const SUPPORTED_MIME = new Set([
   "application/pdf",
 ]);
 
-/**
- * Extract from a file already in Supabase Storage.
- * `storagePath` should NOT include the bucket name.
- */
-export async function extractFromStorage(
-  storagePath: string
-): Promise<ExtractResult> {
+export async function extractFromStorage(storagePath: string): Promise<ExtractResult> {
   const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase.storage
-    .from(DOC_BUCKET)
-    .download(storagePath);
+  const { data, error } = await supabase.storage.from(DOC_BUCKET).download(storagePath);
 
   if (error || !data) {
-    return {
-      status: "failed_to_parse",
-      reason: "file_not_found",
-      message: error?.message ?? `Not found in ${DOC_BUCKET}/${storagePath}`,
-      retryable: false,
-    };
+    return fail("file_not_found", error?.message ?? `Not found: ${storagePath}`, false);
   }
 
   const bytes = new Uint8Array(await data.arrayBuffer());
@@ -175,106 +126,72 @@ export async function extractFromStorage(
   return extractFromBytes(bytes, mime, storagePath);
 }
 
-/**
- * Extract from raw bytes + mime. Use this when you already have the file
- * in memory (e.g. from a multipart upload without ever touching Storage).
- */
 export async function extractFromBytes(
   bytes: Uint8Array,
   mime: string,
   hintFilename?: string
 ): Promise<ExtractResult> {
-  if (bytes.byteLength === 0) {
-    return fail("file_not_found", "Empty file", false);
-  }
+  if (bytes.byteLength === 0) return fail("file_not_found", "Empty file", false);
   if (bytes.byteLength > MAX_BYTES) {
-    return fail(
-      "file_too_large",
-      `File is ${bytes.byteLength} bytes, max ${MAX_BYTES}`,
-      false
-    );
+    return fail("file_too_large", `${bytes.byteLength} > ${MAX_BYTES}`, false);
   }
   if (!SUPPORTED_MIME.has(mime)) {
-    return fail("unsupported_mime", `Mime "${mime}" not supported`, false);
+    return fail("unsupported_mime", `mime "${mime}" not supported`, false);
   }
 
   const startedAt = Date.now();
+  const model = extractModel();
 
-  // Build the multimodal user message. OpenAI supports inline base64
-  // for both images and PDFs (when using gpt-4o-2024-08-06 or newer).
-  const base64 = Buffer.from(bytes).toString("base64");
-  const dataUrl = `data:${mime};base64,${base64}`;
+  // Build multimodal content. AI SDK supports `image` (data URL or Buffer)
+  // and `file` (any mime type — Gemini handles PDF natively).
+  const isPdf = mime === "application/pdf";
+  const userContent = isPdf
+    ? ([
+        {
+          type: "file" as const,
+          data: bytes,
+          mediaType: mime,
+        },
+        { type: "text" as const, text: USER_PROMPT },
+      ])
+    : ([
+        {
+          type: "image" as const,
+          image: bytes,
+          mediaType: mime,
+        },
+        { type: "text" as const, text: USER_PROMPT },
+      ]);
 
-  const userContent =
-    mime === "application/pdf"
-      ? [
-          {
-            type: "file" as const,
-            file: {
-              file_data: dataUrl,
-              filename: hintFilename?.split("/").pop() ?? "invoice.pdf",
-            },
-          },
-          { type: "text" as const, text: USER_PROMPT },
-        ]
-      : [
-          {
-            type: "image_url" as const,
-            image_url: { url: dataUrl, detail: "high" as const },
-          },
-          { type: "text" as const, text: USER_PROMPT },
-        ];
-
-  let completion;
+  let parsed: ExtractedInvoice;
+  let usage: { inputTokens?: number; outputTokens?: number } | undefined;
   try {
-    completion = await openai.beta.chat.completions.parse({
-      model: EXTRACT_MODEL,
-      temperature: 0,
-      max_tokens: 4096,
+    const result = await generateObject({
+      model,
+      schema: ExtractedInvoiceSchema,
+      system: SYSTEM_PROMPT,
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        // `any` because openai SDK types lag behind the "file" content type;
-        // payload is valid for gpt-4o-2024-08-06 onwards.
-        { role: "user", content: userContent as any },
+        {
+          role: "user",
+          content: userContent as never,
+        },
       ],
-      response_format: zodResponseFormat(ExtractedInvoiceSchema, "invoice"),
+      temperature: 0,
     });
+    parsed = result.object;
+    usage = result.usage;
   } catch (err) {
-    return mapOpenAIError(err, Date.now() - startedAt);
+    return mapAiError(err, Date.now() - startedAt);
   }
 
   const latency_ms = Date.now() - startedAt;
-  const meta = {
-    model: completion.model,
-    prompt_tokens: completion.usage?.prompt_tokens ?? 0,
-    completion_tokens: completion.usage?.completion_tokens ?? 0,
+  const meta: ExtractMeta = {
+    model: model.modelId,
     latency_ms,
+    prompt_tokens: usage?.inputTokens ?? 0,
+    completion_tokens: usage?.outputTokens ?? 0,
   };
 
-  const message = completion.choices[0]?.message;
-  if (!message || message.refusal) {
-    return {
-      status: "failed_to_parse",
-      reason: "ai_invalid_response",
-      message: message?.refusal ?? "Model returned no message",
-      retryable: false,
-      meta,
-    };
-  }
-  if (!message.parsed) {
-    return {
-      status: "failed_to_parse",
-      reason: "ai_invalid_response",
-      message: "Model output did not conform to schema",
-      retryable: true,
-      meta,
-    };
-  }
-
-  const parsed = message.parsed;
-
-  // Semantic gates — the model technically returned valid JSON,
-  // but the content tells us we shouldn't trust it downstream.
   if (parsed.not_an_invoice) {
     return {
       status: "failed_to_parse",
@@ -319,61 +236,50 @@ export async function extractFromBytes(
  * Helpers
  * ──────────────────────────────────────────────────────────── */
 
-function fail(
-  reason: ExtractFailureReason,
-  message: string,
-  retryable: boolean
-): ExtractResult {
+function fail(reason: ExtractFailureReason, message: string, retryable: boolean): ExtractResult {
   return { status: "failed_to_parse", reason, message, retryable };
 }
 
 function guessMimeFromPath(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   switch (ext) {
-    case "pdf":
-      return "application/pdf";
-    case "png":
-      return "image/png";
+    case "pdf": return "application/pdf";
+    case "png": return "image/png";
     case "jpg":
-    case "jpeg":
-      return "image/jpeg";
-    case "webp":
-      return "image/webp";
-    case "heic":
-      return "image/heic";
-    default:
-      return "application/octet-stream";
+    case "jpeg": return "image/jpeg";
+    case "webp": return "image/webp";
+    case "heic": return "image/heic";
+    default: return "application/octet-stream";
   }
 }
 
-function mapOpenAIError(err: unknown, latency_ms: number): ExtractResult {
-  // Avoid importing the OpenAI error class at the top — keep this resilient
-  // even if the SDK shape shifts. We sniff by name and status.
-  const e = err as { name?: string; status?: number; code?: string; message?: string };
+function mapAiError(err: unknown, latency_ms: number): ExtractResult {
+  const e = err as { name?: string; statusCode?: number; message?: string };
   const message = e?.message ?? String(err);
   const meta = { latency_ms };
 
-  if (e?.name === "APIConnectionTimeoutError" || /timeout/i.test(message)) {
+  if (err instanceof NoObjectGeneratedError) {
     return {
       status: "failed_to_parse",
-      reason: "ai_timeout",
+      reason: "ai_invalid_response",
+      message: "Model failed to produce valid schema-conformant JSON",
+      retryable: true,
+      meta,
+    };
+  }
+  if (/timeout/i.test(message)) {
+    return { status: "failed_to_parse", reason: "ai_timeout", message, retryable: true, meta };
+  }
+  if (e?.statusCode === 429 || /quota|rate/i.test(message)) {
+    return {
+      status: "failed_to_parse",
+      reason: "ai_quota_exceeded",
       message,
       retryable: true,
       meta,
     };
   }
-  if (e?.status === 429 || e?.code === "insufficient_quota") {
-    return {
-      status: "failed_to_parse",
-      reason: "ai_quota_exceeded",
-      message,
-      // 429 from rate-limit is retryable; from quota is not.
-      retryable: e?.code !== "insufficient_quota",
-      meta,
-    };
-  }
-  if (e?.status === 400) {
-    // Most likely a malformed image / unsupported file
+  if (e?.statusCode === 400) {
     return {
       status: "failed_to_parse",
       reason: "image_unreadable",

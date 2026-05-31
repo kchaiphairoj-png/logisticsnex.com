@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { zodResponseFormat } from "openai/helpers/zod";
-import { openai } from "@/lib/openai";
+import { generateObject, embed, NoObjectGeneratedError } from "ai";
+import { classifierModel, embeddingModel } from "@/lib/ai";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 /* ────────────────────────────────────────────────────────────
@@ -9,83 +9,46 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const SupplierMatchSchema = z.object({
   supplier_id: z.string().uuid(),
-  match_score: z
-    .number()
-    .min(0)
-    .max(1)
-    .describe(
-      "0..1 overall fit score. 0.9+ = excellent, 0.7-0.9 = good, <0.7 = consider with caution."
-    ),
-  reasoning: z
-    .string()
-    .describe("ภาษาไทย — 1-2 ประโยคอธิบายว่าทำไม match ได้คะแนนนี้"),
-  pros: z
-    .array(z.string())
-    .min(0)
-    .max(5)
-    .describe("ภาษาไทย — bullet points ที่เป็นข้อดี"),
-  cons: z
-    .array(z.string())
-    .min(0)
-    .max(5)
-    .describe("ภาษาไทย — bullet points ที่เป็นข้อกังวล / risk"),
+  match_score: z.number().min(0).max(1).describe("0..1 fit score."),
+  reasoning: z.string().describe("ภาษาไทย — 1-2 ประโยคอธิบาย"),
+  pros: z.array(z.string()).min(0).max(5),
+  cons: z.array(z.string()).min(0).max(5),
   estimated_unit_price_usd: z
     .number()
     .nullable()
-    .describe(
-      "ราคา/หน่วยที่คาดว่าจะได้ (USD) — interpolate จาก supplier's price range + RFQ quantity"
-    ),
+    .describe("Estimated unit price (USD) from supplier price range."),
   estimated_duty_saving_thb: z
     .number()
-    .describe(
-      "ประมาณการการประหยัดอากรขาเข้า (THB) ถ้าใช้ FTA ที่ supplier รองรับ"
-    ),
-  recommended_action: z
-    .enum(["request_quote", "request_sample", "skip", "negotiate"])
-    .describe("Action ที่แนะนำให้ buyer ทำต่อ"),
+    .describe("Estimated duty saving (THB) via available FTA."),
+  recommended_action: z.enum(["request_quote", "request_sample", "skip", "negotiate"]),
 });
 
 export const MatchResultSchema = z.object({
-  matches: z
-    .array(SupplierMatchSchema)
-    .min(0)
-    .max(10)
-    .describe("Sorted by match_score descending."),
-  insights: z
-    .string()
-    .describe(
-      "ภาษาไทย — ภาพรวมการแมตช์ (เช่น 'มี supplier 3 รายที่ตรงสเปก, แนะนำ X เพราะ Y') 2-3 ประโยค"
-    ),
+  matches: z.array(SupplierMatchSchema).min(0).max(10),
+  insights: z.string().describe("ภาษาไทย — 2-3 ประโยค overall recommendation"),
 });
 
 export type SupplierMatch = z.infer<typeof SupplierMatchSchema>;
 export type MatchResult = z.infer<typeof MatchResultSchema>;
 
 /* ────────────────────────────────────────────────────────────
- * Input
+ * Input + result
  * ──────────────────────────────────────────────────────────── */
 
 export interface MatchInput {
-  /** Free-text description of what the buyer wants (TH or EN) */
   description: string;
-
-  /** Optional structured fields from the RFQ form */
   quantity?: number;
   quantity_unit?: string;
   target_price_usd?: number;
-  preferred_origin?: string[]; // ISO-2 codes
+  preferred_origin?: string[];
   required_form_e?: boolean;
   required_form_rcep?: boolean;
   required_certifications?: string[];
   delivery_incoterm?: string;
   delivery_port?: string;
-  needed_by_date?: string; // ISO date
+  needed_by_date?: string;
   hs_code_hint?: string;
 }
-
-/* ────────────────────────────────────────────────────────────
- * Result discriminated union
- * ──────────────────────────────────────────────────────────── */
 
 export type MatchFailureReason =
   | "empty_description"
@@ -96,24 +59,22 @@ export type MatchFailureReason =
   | "ai_invalid_response"
   | "unknown_error";
 
+export interface MatchMeta {
+  embedding_model: string;
+  matcher_model: string;
+  candidates_evaluated: number;
+  latency_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
 export type MatchOutput =
-  | {
-      status: "success";
-      data: MatchResult;
-      meta: {
-        embedding_model: string;
-        matcher_model: string;
-        candidates_evaluated: number;
-        prompt_tokens: number;
-        completion_tokens: number;
-        latency_ms: number;
-      };
-    }
+  | { status: "success"; data: MatchResult; meta: MatchMeta }
   | {
       status: "failed";
       reason: MatchFailureReason;
       message: string;
-      meta?: Partial<{ latency_ms: number }>;
+      meta?: Partial<MatchMeta>;
     };
 
 /* ────────────────────────────────────────────────────────────
@@ -126,65 +87,48 @@ verification status, FTA support, ratings, and trade history), score and rank
 each supplier for fit.
 
 # Scoring rubric (0..1)
-Weight roughly:
+Weight:
 - Product spec match (40%) — does the supplier's product line actually fit?
 - Trust signals (25%) — verified, trade assurance, rating, response rate, on-time delivery
-- Commercial fit (20%) — MOQ vs buyer qty, price range vs target, lead time vs deadline
+- Commercial fit (20%) — MOQ vs buyer qty, price vs target, lead time vs deadline
 - FTA / duty optimization (15%) — Form E for CN, Form D for ASEAN, etc.
 
 # Scoring guide
 - 0.90+: clear winner — verified + spec match + FTA + commercial fit
 - 0.75-0.89: solid match — minor concerns
-- 0.50-0.74: possible — but real gaps (no FTA, high MOQ, etc.)
-- <0.50: skip — major mismatch
+- 0.50-0.74: possible — real gaps
+- <0.50: skip
 
 # Reasoning style
-- All "reasoning", "pros", "cons", "insights" MUST be in Thai.
+- "reasoning", "pros", "cons", "insights" MUST be in Thai.
 - Be specific: "ผลิต X รุ่น Y" not "ผลิตได้".
-- For cons, prefer concrete concerns over generic ones.
 
-# Estimated duty saving calculation
-- If supplier supports Form E and buyer origin is CN → assume 10% MFN avoidance.
-- If buyer wants ASEAN supplier with Form D → 5-10% saving typical.
-- Use the formula: saving_thb ≈ quantity × supplier_avg_price_usd × 36 × fta_diff_pct.
-- If supplier doesn't support relevant FTA, saving = 0.
+# Estimated duty saving formula
+- saving_thb ≈ quantity × supplier_avg_price_usd × 36 × fta_diff_pct.
 
-# Output rules
-- Return at most 10 matches, sorted by match_score descending.
-- ONLY include supplier_id values present in the candidate list — never invent.
-- recommended_action:
-  - "request_quote": top-tier match, ready for RFQ
-  - "request_sample": good match but need to verify quality first
-  - "negotiate": match but pricing/MOQ not ideal — worth haggling
-  - "skip": low fit, recommend not to engage`;
+# Rules
+- Return at most 10 matches, sorted by score descending.
+- ONLY include supplier_id values from the candidate list — never invent.`;
 
 /* ────────────────────────────────────────────────────────────
- * Main entry point
+ * Main entry
  * ──────────────────────────────────────────────────────────── */
-
-const EMBED_MODEL = "text-embedding-3-small";
-const MATCHER_MODEL =
-  process.env.OPENAI_MATCHER_MODEL ?? "gpt-4o-mini-2024-07-18";
 
 export async function matchSuppliers(input: MatchInput): Promise<MatchOutput> {
   const startedAt = Date.now();
 
   if (!input.description?.trim()) {
-    return {
-      status: "failed",
-      reason: "empty_description",
-      message: "Description is required",
-    };
+    return { status: "failed", reason: "empty_description", message: "Description is required" };
   }
 
-  /* ─── 1. Embed buyer's intent ─── */
+  // 1. Embed
   let embedding: number[];
   try {
-    const e = await openai.embeddings.create({
-      model: EMBED_MODEL,
-      input: enrichForEmbedding(input),
+    const result = await embed({
+      model: embeddingModel(),
+      value: enrichForEmbedding(input),
     });
-    embedding = e.data[0].embedding;
+    embedding = result.embedding;
   } catch (err) {
     return {
       status: "failed",
@@ -194,22 +138,19 @@ export async function matchSuppliers(input: MatchInput): Promise<MatchOutput> {
     };
   }
 
-  /* ─── 2. Two-pronged vector search ─── */
+  // 2. Two-pronged vector search
   const supabase = getSupabaseAdmin();
   const originFilter =
     input.preferred_origin && input.preferred_origin.length === 1
       ? input.preferred_origin[0]
       : null;
 
-  // (a) Match by product → great precision when buyer knows what they want
   const productResults = await supabase.rpc("match_supplier_products", {
     query_embedding: embedding,
     match_count: 15,
     country_filter: originFilter,
   });
 
-  // (b) Match by supplier directly → covers cases where no product is indexed
-  //     but the supplier's main_categories overlap.
   const supplierResults = await supabase.rpc("match_suppliers", {
     query_embedding: embedding,
     match_count: 10,
@@ -220,7 +161,6 @@ export async function matchSuppliers(input: MatchInput): Promise<MatchOutput> {
   const productRows = (productResults.data ?? []) as any[];
   const supplierRows = (supplierResults.data ?? []) as any[];
 
-  // Merge and dedupe supplier ids
   const supplierIds = Array.from(
     new Set([
       ...productRows.map((r) => r.supplier_id),
@@ -232,12 +172,12 @@ export async function matchSuppliers(input: MatchInput): Promise<MatchOutput> {
     return {
       status: "failed",
       reason: "no_candidates",
-      message: "ไม่พบ supplier ที่ตรงกับ embedding — ลองใช้คำอธิบายอื่น",
+      message: "ไม่พบ supplier ที่ตรงกับคำอธิบาย",
       meta: { latency_ms: Date.now() - startedAt },
     };
   }
 
-  /* ─── 3. Fetch full supplier dossiers for the LLM ─── */
+  // 3. Fetch dossiers
   const { data: dossiers } = await supabase
     .from("suppliers")
     .select(
@@ -245,7 +185,6 @@ export async function matchSuppliers(input: MatchInput): Promise<MatchOutput> {
     )
     .in("id", supplierIds);
 
-  // Attach top product(s) per supplier for context
   const productsBySupplier = new Map<string, any[]>();
   for (const p of productRows) {
     const list = productsBySupplier.get(p.supplier_id) ?? [];
@@ -257,51 +196,42 @@ export async function matchSuppliers(input: MatchInput): Promise<MatchOutput> {
     .map((s: any) => formatSupplierForPrompt(s, productsBySupplier.get(s.id) ?? []))
     .join("\n\n");
 
-  /* ─── 4. LLM ranking ─── */
+  // 4. LLM ranking
   const userMessage = buildUserMessage(input, candidateBlock);
+  const model = classifierModel();
 
-  let completion;
+  let parsed: MatchResult;
+  let usage: { inputTokens?: number; outputTokens?: number } | undefined;
   try {
-    completion = await openai.beta.chat.completions.parse({
-      model: MATCHER_MODEL,
-      temperature: 0.1, // small randomness for natural-sounding reasoning
-      max_tokens: 3000,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userMessage },
-      ],
-      response_format: zodResponseFormat(MatchResultSchema, "matches"),
+    const result = await generateObject({
+      model,
+      schema: MatchResultSchema,
+      system: SYSTEM_PROMPT,
+      prompt: userMessage,
+      temperature: 0.1,
     });
+    parsed = result.object;
+    usage = result.usage;
   } catch (err) {
-    return mapOpenAIError(err, Date.now() - startedAt);
+    return mapAiError(err, Date.now() - startedAt);
   }
 
-  const msg = completion.choices[0]?.message;
-  if (!msg || msg.refusal || !msg.parsed) {
-    return {
-      status: "failed",
-      reason: "ai_invalid_response",
-      message: msg?.refusal ?? "No parsed output",
-      meta: { latency_ms: Date.now() - startedAt },
-    };
-  }
-
-  // Sanity-check: drop any supplier_id the LLM hallucinated
+  // Sanity-check: drop hallucinated supplier_ids
   const validIds = new Set(supplierIds);
-  const cleanMatches = msg.parsed.matches
+  const cleanMatches = parsed.matches
     .filter((m) => validIds.has(m.supplier_id))
     .sort((a, b) => b.match_score - a.match_score);
 
   return {
     status: "success",
-    data: { ...msg.parsed, matches: cleanMatches },
+    data: { ...parsed, matches: cleanMatches },
     meta: {
-      embedding_model: EMBED_MODEL,
-      matcher_model: completion.model,
+      embedding_model: "text-embedding-004",
+      matcher_model: model.modelId,
       candidates_evaluated: supplierIds.length,
-      prompt_tokens: completion.usage?.prompt_tokens ?? 0,
-      completion_tokens: completion.usage?.completion_tokens ?? 0,
       latency_ms: Date.now() - startedAt,
+      prompt_tokens: usage?.inputTokens ?? 0,
+      completion_tokens: usage?.outputTokens ?? 0,
     },
   };
 }
@@ -357,20 +287,28 @@ ${
     ? `Relevant products:\n${products
         .map(
           (p) =>
-            `  • ${p.name_en} [HS ${p.hs_code}] MOQ ${p.moq}, $${p.price_min_usd}-${p.price_max_usd}, ${p.lead_time_days_min}d lead, eligible: ${(p.hs_form_eligible ?? []).join("/")}`
+            `  • ${p.name_en} [HS ${p.hs_code}] MOQ ${p.moq}, $${p.price_min_usd}-${p.price_max_usd}, ${p.lead_time_days_min}d lead`
         )
         .join("\n")}`
-    : "Products: (none indexed — use main_categories for matching)"
+    : "Products: (none indexed — use main_categories)"
 }`;
 }
 
-function mapOpenAIError(err: unknown, latency_ms: number): MatchOutput {
-  const e = err as { name?: string; status?: number; message?: string };
+function mapAiError(err: unknown, latency_ms: number): MatchOutput {
+  const e = err as { statusCode?: number; message?: string };
   const message = e?.message ?? String(err);
-  if (e?.name === "APIConnectionTimeoutError" || /timeout/i.test(message)) {
+  if (err instanceof NoObjectGeneratedError) {
+    return {
+      status: "failed",
+      reason: "ai_invalid_response",
+      message: "Model failed to produce valid JSON",
+      meta: { latency_ms },
+    };
+  }
+  if (/timeout/i.test(message)) {
     return { status: "failed", reason: "ai_timeout", message, meta: { latency_ms } };
   }
-  if (e?.status === 429) {
+  if (e?.statusCode === 429 || /quota|rate/i.test(message)) {
     return { status: "failed", reason: "ai_quota_exceeded", message, meta: { latency_ms } };
   }
   return { status: "failed", reason: "unknown_error", message, meta: { latency_ms } };

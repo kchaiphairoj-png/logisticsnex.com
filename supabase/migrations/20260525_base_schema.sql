@@ -224,7 +224,7 @@ create table hs_code_reference (
   duty_rate       numeric(6,3),                         -- MFN duty %
   vat_rate        numeric(6,3) default 7.0,
   excise_rate     numeric(6,3),
-  embedding       vector(1536),                         -- text-embedding-3-small
+  embedding       vector(768),                         -- text-embedding-3-small
   updated_at      timestamptz default now()
 );
 

@@ -2,7 +2,7 @@
 -- Requires: extension `vector`, table `hs_code_reference` with HNSW index.
 
 create or replace function match_hs_codes(
-  query_embedding vector(1536),
+  query_embedding vector(768),
   match_count int default 10,
   -- Optional filter to narrow to a single HS chapter (2-digit prefix).
   -- Speeds search and stops cross-chapter false positives.
