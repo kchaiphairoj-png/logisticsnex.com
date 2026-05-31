@@ -13,7 +13,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { Supplier } from "@/lib/marketplace-data";
+import type { SupplierListItem } from "@/lib/queries/marketplace";
 import { cn } from "@/lib/utils";
 
 export function SupplierCard({
@@ -21,7 +21,7 @@ export function SupplierCard({
   matchScore,
   matchReason,
 }: {
-  supplier: Supplier;
+  supplier: SupplierListItem;
   matchScore?: number;
   matchReason?: string;
 }) {
@@ -73,15 +73,17 @@ export function SupplierCard({
           <div className="flex items-center gap-1.5">
             <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
             <span className="text-sm font-medium tabular-nums">
-              {supplier.rating.toFixed(1)}
+              {supplier.rating > 0 ? supplier.rating.toFixed(1) : "—"}
             </span>
             <span className="text-xs text-muted-foreground">
               ({supplier.review_count})
             </span>
           </div>
-          <span className="text-xs text-muted-foreground">
-            ส่งออก {(supplier.export_volume_usd_yearly / 1_000_000).toFixed(1)}M USD/ปี
-          </span>
+          {supplier.export_volume_usd_yearly > 0 && (
+            <span className="text-xs text-muted-foreground">
+              ส่งออก {(supplier.export_volume_usd_yearly / 1_000_000).toFixed(1)}M USD/ปี
+            </span>
+          )}
         </div>
 
         {/* Match reason (AI) */}
@@ -123,8 +125,20 @@ export function SupplierCard({
         {/* Stats */}
         <div className="mt-4 grid grid-cols-3 gap-2 border-t border-border pt-3">
           <Stat icon={Package} label="สินค้า" value={supplier.product_count.toString()} />
-          <Stat icon={MessageSquare} label="ตอบ" value={`${supplier.response_hours_avg}ชม`} />
-          <Stat icon={Clock} label="ส่ง TH" value={`${supplier.ships_to_thailand_days_min}-${supplier.ships_to_thailand_days_max}ว`} />
+          <Stat
+            icon={MessageSquare}
+            label="ตอบ"
+            value={supplier.response_hours_avg ? `${supplier.response_hours_avg}ชม` : "—"}
+          />
+          <Stat
+            icon={Clock}
+            label="ส่ง TH"
+            value={
+              supplier.ships_to_thailand_days_min > 0
+                ? `${supplier.ships_to_thailand_days_min}-${supplier.ships_to_thailand_days_max}ว`
+                : "—"
+            }
+          />
         </div>
 
         <Button asChild variant="outline" size="sm" className="mt-4 w-full">
@@ -156,60 +170,130 @@ function Stat({
   );
 }
 
+/**
+ * Pick a representative emoji for a product based on its category /
+ * HS chapter. Used as the visual when no image_url is set.
+ */
+function productEmoji(p: { category?: string | null; hs_code?: string | null }): string {
+  const cat = (p.category ?? "").toLowerCase();
+  const hs2 = (p.hs_code ?? "").slice(0, 2);
+  if (cat.includes("solar") || cat.includes("inverter")) return "☀️";
+  if (cat.includes("battery")) return "🔋";
+  if (cat.includes("controller")) return "⚡";
+  if (cat.includes("cosmetic") || cat.includes("serum") || cat.includes("skincare")) return "💄";
+  if (cat.includes("sunscreen")) return "🧴";
+  if (cat.includes("apparel") || cat.includes("knit")) return "👕";
+  if (cat.includes("home") || cat.includes("textile") || cat.includes("blanket")) return "🛏️";
+  if (cat.includes("furniture") || cat.includes("office")) return "🪑";
+  if (cat.includes("light")) return "💡";
+  if (cat.includes("air") || cat.includes("purifier")) return "🌀";
+  if (cat.includes("vacuum") || cat.includes("cleaning")) return "🤖";
+  if (cat.includes("hardware") || cat.includes("machined") || cat.includes("fastener")) return "🔩";
+  if (hs2 === "85") return "🔌";
+  if (hs2 === "33") return "💄";
+  if (hs2 === "61" || hs2 === "62") return "👕";
+  if (hs2 === "94") return "🛋️";
+  if (hs2 === "73") return "🔩";
+  return "📦";
+}
+
+/**
+ * Loose shape ProductCard accepts — covers both DB rows (SupplierProductRow,
+ * TrendingProduct) and the legacy mock Product type. Only the fields actually
+ * rendered are required.
+ */
+interface ProductCardProduct {
+  id: string;
+  supplier_id: string;
+  name_en: string;
+  name_th?: string | null;
+  category?: string | null;
+  hs_code?: string | null;
+  moq: number;
+  price_min_usd?: number | null;
+  price_max_usd?: number | null;
+  price_unit?: string;
+  lead_time_days_min?: number | null;
+  lead_time_days_max?: number | null;
+  hs_form_eligible: string[];
+  /** Present on TrendingProduct (joined with supplier info). */
+  supplier_trade_name?: string;
+  supplier_country_flag?: string;
+  supplier_is_verified?: boolean;
+}
+
 export function ProductCard({
   product,
   supplier,
 }: {
-  product: {
-    id: string;
-    supplier_id: string;
-    name_th: string;
-    name_en: string;
-    image_emoji: string;
-    category: string;
-    hs_code: string;
-    moq: number;
-    price_min_usd: number;
-    price_max_usd: number;
-    lead_time_days_min: number;
-    lead_time_days_max: number;
-    hs_form_eligible: string[];
-    total_sold_units: number;
-  };
-  supplier?: Supplier;
+  product: ProductCardProduct;
+  /** Pass a SupplierListItem when used outside the "trending" feed. */
+  supplier?: Pick<
+    SupplierListItem,
+    "id" | "trade_name" | "country_flag" | "is_verified"
+  >;
 }) {
+  const supplierLink = supplier?.id ?? product.supplier_id;
+  const supplierName =
+    supplier?.trade_name ?? product.supplier_trade_name ?? "—";
+  const supplierFlag =
+    supplier?.country_flag ?? product.supplier_country_flag ?? "🏳";
+  const supplierVerified =
+    supplier?.is_verified ?? product.supplier_is_verified ?? false;
+
+  const priceMin = product.price_min_usd ?? 0;
+  const priceMax = product.price_max_usd ?? 0;
+  const leadMin = product.lead_time_days_min ?? 0;
+  const leadMax = product.lead_time_days_max ?? 0;
+
   return (
     <Card className="group overflow-hidden transition-all hover:border-primary/40">
       <div className="flex h-32 items-center justify-center bg-gradient-to-br from-secondary/60 to-secondary/20 text-5xl">
-        {product.image_emoji}
+        {productEmoji(product)}
       </div>
       <div className="p-4">
         <div className="flex items-center gap-2">
-          <Badge variant="outline" className="font-mono text-[10px]">
-            {product.hs_code}
-          </Badge>
-          <span className="text-[10px] text-muted-foreground">
-            {product.category}
-          </span>
+          {product.hs_code && (
+            <Badge variant="outline" className="font-mono text-[10px]">
+              {product.hs_code}
+            </Badge>
+          )}
+          {product.category && (
+            <span className="text-[10px] text-muted-foreground truncate">
+              {product.category}
+            </span>
+          )}
         </div>
         <h3 className="mt-2 line-clamp-2 text-sm font-medium leading-snug">
-          {product.name_th}
+          {product.name_th ?? product.name_en}
         </h3>
-        <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-1">
-          {product.name_en}
-        </p>
+        {product.name_th && (
+          <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-1">
+            {product.name_en}
+          </p>
+        )}
 
         <div className="mt-3 flex items-baseline gap-1.5">
           <span className="text-base font-bold text-foreground tabular-nums">
-            ${product.price_min_usd.toFixed(2)}-{product.price_max_usd.toFixed(2)}
+            ${priceMin.toFixed(2)}-${priceMax.toFixed(2)}
           </span>
-          <span className="text-[10px] text-muted-foreground">/ pcs</span>
+          <span className="text-[10px] text-muted-foreground">/ {product.price_unit ?? "pcs"}</span>
         </div>
 
         <p className="mt-1 text-[11px] text-muted-foreground">
-          MOQ <span className="font-medium text-foreground">{product.moq.toLocaleString()}</span>
-          {" · "}
-          ส่ง <span className="font-medium text-foreground">{product.lead_time_days_min}-{product.lead_time_days_max} วัน</span>
+          MOQ{" "}
+          <span className="font-medium text-foreground">
+            {product.moq.toLocaleString()}
+          </span>
+          {leadMax > 0 && (
+            <>
+              {" · "}
+              ส่ง{" "}
+              <span className="font-medium text-foreground">
+                {leadMin}-{leadMax} วัน
+              </span>
+            </>
+          )}
         </p>
 
         <div className="mt-3 flex flex-wrap gap-1">
@@ -228,18 +312,16 @@ export function ProductCard({
           ))}
         </div>
 
-        {supplier && (
-          <Link
-            href={`/marketplace/suppliers/${supplier.id}`}
-            className="mt-3 flex items-center gap-1.5 border-t border-border pt-3 text-[11px] text-muted-foreground hover:text-foreground"
-          >
-            <span>{supplier.country_flag}</span>
-            <span className="truncate">{supplier.trade_name}</span>
-            {supplier.is_verified && (
-              <ShieldCheck className="h-3 w-3 text-emerald-400 shrink-0" />
-            )}
-          </Link>
-        )}
+        <Link
+          href={`/marketplace/suppliers/${supplierLink}`}
+          className="mt-3 flex items-center gap-1.5 border-t border-border pt-3 text-[11px] text-muted-foreground hover:text-foreground"
+        >
+          <span>{supplierFlag}</span>
+          <span className="truncate">{supplierName}</span>
+          {supplierVerified && (
+            <ShieldCheck className="h-3 w-3 text-emerald-400 shrink-0" />
+          )}
+        </Link>
       </div>
     </Card>
   );

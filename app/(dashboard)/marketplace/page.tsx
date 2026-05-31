@@ -1,9 +1,13 @@
-"use client";
-import * as React from "react";
+/**
+ * /marketplace — Server Component (discover page)
+ *
+ * Fetches stats, featured suppliers, and trending products from Supabase in
+ * parallel. The AI matcher hero stays as a Client Component because it owns
+ * the search form state and calls /api/ai/match-suppliers.
+ */
 import Link from "next/link";
 import {
   Sparkles,
-  Search,
   ShieldCheck,
   TrendingUp,
   Globe,
@@ -11,191 +15,91 @@ import {
   Send,
   Building2,
   Award,
-  Loader2,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Select } from "@/components/ui/select";
-import {
-  suppliers,
-  products,
-  categories,
-  getSupplier,
-} from "@/lib/marketplace-data";
 import {
   SupplierCard,
   ProductCard,
 } from "@/components/marketplace/supplier-card";
+import { MarketplaceHero } from "./marketplace-hero";
+import {
+  getFeaturedSuppliers,
+  getTrendingProducts,
+  getMarketplaceStats,
+} from "@/lib/queries/marketplace";
 import { cn } from "@/lib/utils";
 
-const stats = [
-  { label: "Verified Suppliers", value: "2,108", sub: "ใน 14 ประเทศ", icon: ShieldCheck, color: "text-emerald-400" },
-  { label: "สินค้าที่ classify HS Code แล้ว", value: "47,212", sub: "พร้อม Form E", icon: Sparkles, color: "text-blue-400" },
-  { label: "RFQ ที่ได้ quotes ใน 24 ชม.", value: "94%", sub: "เฉลี่ย 3.2 ใบเสนอ", icon: TrendingUp, color: "text-sky-400" },
-  { label: "ประหยัดอากรเฉลี่ยต่อ shipment", value: "฿42K", sub: "ผ่าน FTA matching", icon: Award, color: "text-amber-400" },
+export const dynamic = "force-dynamic";
+
+/** Categories shown in the "หมวดยอดนิยม" strip — static for now. */
+const CATEGORIES = [
+  { slug: "electronics", name: "อิเล็กทรอนิกส์", emoji: "🔌", hs_chapter: "85" },
+  { slug: "solar",       name: "พลังงาน / โซลาร์", emoji: "☀️", hs_chapter: "85" },
+  { slug: "apparel",     name: "เสื้อผ้า / สิ่งทอ",  emoji: "👕", hs_chapter: "61" },
+  { slug: "cosmetics",   name: "เครื่องสำอาง",       emoji: "💄", hs_chapter: "33" },
+  { slug: "home",        name: "ของใช้ในบ้าน",       emoji: "🏠", hs_chapter: "94" },
+  { slug: "machinery",   name: "เครื่องจักร",        emoji: "⚙️", hs_chapter: "84" },
+  { slug: "hardware",    name: "ฮาร์ดแวร์",          emoji: "🔩", hs_chapter: "73" },
+  { slug: "auto",        name: "ยานยนต์ / ชิ้นส่วน", emoji: "🚗", hs_chapter: "87" },
 ];
 
-// Pretend AI match results — in production this comes from
-// POST /api/ai/match-suppliers with the user's free-text query.
-const aiMatches = [
-  { supplier_id: "sup-001", score: 0.94, reason: "ผลิต hybrid inverter ตรงสเปก, ออก Form E ลดอากร 10% → 0%, ส่งจาก Shekou ใช้ 18-25 วัน" },
-  { supplier_id: "sup-006", score: 0.81, reason: "มี air purifier line คล้ายกัน ปริมาณการขายสูงในไทย แต่ราคา MOQ สูงกว่า" },
-  { supplier_id: "sup-004", score: 0.42, reason: "ไม่ตรงหมวด — เป็น cosmetics ไม่ใช่ electronics" },
-];
+export default async function MarketplacePage() {
+  const [stats, featured, trending] = await Promise.all([
+    getMarketplaceStats(),
+    getFeaturedSuppliers(6),
+    getTrendingProducts(6),
+  ]);
 
-export default function MarketplacePage() {
-  const [query, setQuery] = React.useState("");
-  const [origin, setOrigin] = React.useState("any");
-  const [requireFormE, setRequireFormE] = React.useState(false);
-  const [searching, setSearching] = React.useState(false);
-  const [matched, setMatched] = React.useState<typeof aiMatches | null>(null);
-
-  const handleMatch = () => {
-    if (!query.trim()) return;
-    setSearching(true);
-    // simulate AI call
-    setTimeout(() => {
-      setMatched(aiMatches);
-      setSearching(false);
-    }, 1400);
-  };
+  const statCards = [
+    {
+      label: "Verified Suppliers",
+      value: stats.verified_supplier_count.toLocaleString(),
+      sub: `ใน ${stats.countries_represented} ประเทศ`,
+      icon: ShieldCheck,
+      color: "text-emerald-400",
+    },
+    {
+      label: "สินค้าที่ classify HS Code แล้ว",
+      value: stats.classified_product_count.toLocaleString(),
+      sub: "พร้อม Form E",
+      icon: Sparkles,
+      color: "text-blue-400",
+    },
+    {
+      label: "RFQ ที่ได้ quotes ใน 24 ชม.",
+      value: "94%",
+      sub: "เฉลี่ย 3.2 ใบเสนอ",
+      icon: TrendingUp,
+      color: "text-sky-400",
+    },
+    {
+      label: "ประหยัดอากรเฉลี่ยต่อ shipment",
+      value: "฿42K",
+      sub: "ผ่าน FTA matching",
+      icon: Award,
+      color: "text-amber-400",
+    },
+  ];
 
   return (
     <div className="mx-auto max-w-7xl space-y-8">
-      {/* Hero with AI matching */}
-      <section className="relative overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-blue-600/15 via-card to-card p-6 lg:p-8">
-        <div className="absolute -top-24 -right-24 h-72 w-72 rounded-full bg-blue-500/10 blur-3xl" />
-        <div className="absolute -bottom-32 -left-24 h-72 w-72 rounded-full bg-sky-500/10 blur-3xl" />
-
-        <div className="relative">
-          <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-            <Sparkles className="h-3 w-3" />
-            AI Matching for Thai SMEs
-          </div>
-          <h1 className="mt-4 text-3xl font-bold tracking-tight lg:text-4xl">
-            หา supplier ที่ <span className="text-primary">ใช่</span> ใน 10 วินาที
-          </h1>
-          <p className="mt-2 text-sm text-muted-foreground max-w-2xl">
-            พิมพ์สิ่งที่คุณต้องการเป็นภาษาไทยปกติ — AI จะหา supplier ที่ตรงสเปก
-            มี Form E พร้อม, ส่งของไปไทยทันเวลา, และคำนวณภาษีที่จะประหยัดได้ให้
-          </p>
-
-          {/* Search */}
-          <div className="mt-6 rounded-xl border border-border bg-card/80 p-3 backdrop-blur">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder='เช่น "อินเวอร์เตอร์ 5kW จำนวน 50 ตัว ราคา 800$ ต้องการ Form E"'
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleMatch()}
-                  className="h-11 border-0 bg-transparent pl-9 text-sm focus-visible:ring-0"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <Select
-                  value={origin}
-                  onChange={(e) => setOrigin(e.target.value)}
-                  className="h-11 w-32 text-xs"
-                >
-                  <option value="any">ทุกประเทศ</option>
-                  <option value="CN">🇨🇳 จีน</option>
-                  <option value="VN">🇻🇳 เวียดนาม</option>
-                  <option value="KR">🇰🇷 เกาหลี</option>
-                  <option value="JP">🇯🇵 ญี่ปุ่น</option>
-                  <option value="IN">🇮🇳 อินเดีย</option>
-                </Select>
-                <label className="flex h-11 items-center gap-2 rounded-md border border-border px-3 cursor-pointer hover:bg-accent">
-                  <input
-                    type="checkbox"
-                    checked={requireFormE}
-                    onChange={(e) => setRequireFormE(e.target.checked)}
-                    className="h-3.5 w-3.5"
-                  />
-                  <span className="text-xs">มี Form E</span>
-                </label>
-                <Button onClick={handleMatch} disabled={searching || !query.trim()} size="lg" className="h-11">
-                  {searching ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      AI กำลังหา...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-4 w-4" />
-                      AI Match
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-
-            {/* Example queries */}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className="text-[11px] text-muted-foreground">ตัวอย่าง:</span>
-              {[
-                "เซรั่มวิตามินซี 3000 ชิ้น GMP",
-                "เสื้อยืดคอตตอน 500 ตัว",
-                "เครื่องฟอกอากาศ Tuya 100 เครื่อง",
-              ].map((q) => (
-                <button
-                  key={q}
-                  onClick={() => {
-                    setQuery(q);
-                  }}
-                  className="rounded-full border border-border bg-secondary/50 px-3 py-1 text-[11px] hover:bg-accent"
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* AI Match results */}
-          {matched && (
-            <div className="mt-6 space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-primary" />
-                  AI พบ {matched.length} supplier ที่ตรงสเปก
-                </h2>
-                <Button asChild variant="outline" size="sm">
-                  <Link href="/marketplace/rfq/new">
-                    ส่ง RFQ ให้ทั้งหมด
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </Link>
-                </Button>
-              </div>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {matched.map((m) => {
-                  const s = getSupplier(m.supplier_id);
-                  if (!s) return null;
-                  return (
-                    <SupplierCard
-                      key={m.supplier_id}
-                      supplier={s}
-                      matchScore={m.score}
-                      matchReason={m.reason}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      </section>
+      {/* Hero (Client — owns AI-matcher form state) */}
+      <MarketplaceHero />
 
       {/* Stats */}
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((s) => {
+        {statCards.map((s) => {
           const Icon = s.icon;
           return (
             <Card key={s.label}>
               <CardContent className="flex items-center gap-3 p-5">
-                <div className={cn("flex h-10 w-10 items-center justify-center rounded-lg bg-secondary", s.color)}>
+                <div
+                  className={cn(
+                    "flex h-10 w-10 items-center justify-center rounded-lg bg-secondary",
+                    s.color
+                  )}
+                >
                   <Icon className="h-5 w-5" />
                 </div>
                 <div>
@@ -220,14 +124,9 @@ export default function MarketplacePage() {
               จัดกลุ่มตามพิกัดศุลกากร เพื่อหา supplier ตรงประเภท
             </p>
           </div>
-          <Button variant="ghost" size="sm" asChild>
-            <Link href="/marketplace/categories">
-              ดูทั้งหมด <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </Button>
         </div>
         <div className="grid gap-3 grid-cols-2 sm:grid-cols-4 lg:grid-cols-8">
-          {categories.map((c) => (
+          {CATEGORIES.map((c) => (
             <Link
               key={c.slug}
               href={`/marketplace?cat=${c.slug}`}
@@ -240,7 +139,7 @@ export default function MarketplacePage() {
                 {c.name}
               </p>
               <p className="text-[10px] text-muted-foreground">
-                {c.supplier_count} suppliers
+                HS {c.hs_chapter}
               </p>
             </Link>
           ))}
@@ -263,9 +162,6 @@ export default function MarketplacePage() {
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Button variant="outline" asChild>
-              <Link href="/marketplace/rfq">ดู RFQ ของฉัน</Link>
-            </Button>
             <Button asChild>
               <Link href="/marketplace/rfq/new">
                 <Sparkles className="h-4 w-4" />
@@ -285,17 +181,19 @@ export default function MarketplacePage() {
               ผ่านการตรวจสอบใบทะเบียน + factory audit + trade history
             </p>
           </div>
-          <Button variant="ghost" size="sm" asChild>
-            <Link href="/marketplace/suppliers">
-              ดูทั้งหมด <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </Button>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {suppliers.slice(0, 6).map((s) => (
-            <SupplierCard key={s.id} supplier={s} />
-          ))}
-        </div>
+        {featured.length === 0 ? (
+          <EmptyState
+            title="ยังไม่มี supplier ในระบบ"
+            hint="seed-marketplace.sql จะเพิ่ม 6 supplier ตัวอย่างให้ดู"
+          />
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {featured.map((s) => (
+              <SupplierCard key={s.id} supplier={s} />
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Trending products */}
@@ -308,11 +206,18 @@ export default function MarketplacePage() {
             </p>
           </div>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
-          {products.map((p) => (
-            <ProductCard key={p.id} product={p} supplier={getSupplier(p.supplier_id)} />
-          ))}
-        </div>
+        {trending.length === 0 ? (
+          <EmptyState
+            title="ยังไม่มีสินค้าในระบบ"
+            hint="ผูกหน้านี้กับข้อมูลจริงแล้ว — seed ให้เห็นตัวอย่าง"
+          />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+            {trending.map((p) => (
+              <ProductCard key={p.id} product={p} />
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Why us */}
@@ -340,6 +245,15 @@ export default function MarketplacePage() {
         </div>
       </section>
     </div>
+  );
+}
+
+function EmptyState({ title, hint }: { title: string; hint: string }) {
+  return (
+    <Card className="p-8 text-center">
+      <p className="text-sm font-medium">{title}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+    </Card>
   );
 }
 
