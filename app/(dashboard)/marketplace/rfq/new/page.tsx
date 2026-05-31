@@ -228,13 +228,20 @@ export default function NewRfqPage() {
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="space-y-1.5">
-                  <Label htmlFor="title-input">หัวข้อ RFQ</Label>
+                  <Label htmlFor="title-input">
+                    หัวข้อ RFQ <span className="text-rose-400">*</span>
+                  </Label>
                   <Input
                     id="title-input"
                     placeholder='เช่น "Hybrid Solar Inverter 5kW + Form E"'
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                   />
+                  {title.length > 0 && title.trim().length <= 5 && (
+                    <p className="text-[11px] text-amber-400">
+                      ต้องการอย่างน้อย 6 ตัวอักษร (ตอนนี้ {title.trim().length})
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-1.5">
@@ -256,7 +263,10 @@ export default function NewRfqPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="desc">รายละเอียดและ specification</Label>
+                  <Label htmlFor="desc">
+                    รายละเอียดและ specification{" "}
+                    <span className="text-rose-400">*</span>
+                  </Label>
                   <Textarea
                     id="desc"
                     rows={5}
@@ -266,9 +276,21 @@ export default function NewRfqPage() {
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                   />
-                  <p className="text-[11px] text-muted-foreground">
-                    AI จะ analyze ข้อความนี้และแนะนำ HS Code อัตโนมัติ
-                  </p>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <p className="text-muted-foreground">
+                      AI จะ analyze ข้อความนี้และแนะนำ HS Code อัตโนมัติ
+                    </p>
+                    <p
+                      className={cn(
+                        "tabular-nums",
+                        description.trim().length >= 20
+                          ? "text-emerald-400"
+                          : "text-amber-400"
+                      )}
+                    >
+                      {description.trim().length}/20 ขั้นต่ำ
+                    </p>
+                  </div>
                 </div>
               </CardContent>
             </Card>
