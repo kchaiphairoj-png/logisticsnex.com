@@ -1,6 +1,7 @@
 "use client";
 import * as React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   UploadCloud,
   FileText,
@@ -28,26 +29,25 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { createClient } from "@/lib/supabase/client";
+import { registerUploadedDocument } from "@/lib/actions/documents";
 import { cn } from "@/lib/utils";
 
-type FileStatus = "queued" | "uploading" | "uploaded" | "analyzing" | "done" | "error";
+type FileStatus = "queued" | "uploading" | "registering" | "done" | "error";
 
 type UploadFile = {
-  id: string;
+  id: string;            // UUID for documents.id + storage filename
+  file: File;
   name: string;
   sizeKB: number;
   type: "pdf" | "image" | "other";
   status: FileStatus;
   progress: number;
-  detectedDocType?: string;
+  error?: string;
+  detectedDocType?: "invoice" | "packing_list" | "bl" | "awb" | "other";
 };
 
-const detectedDemo: Record<string, string> = {
-  invoice: "Invoice",
-  packing: "Packing List",
-  bl: "B/L",
-  awb: "AWB",
-};
+const DOC_BUCKET = "documents";
 
 function inferType(name: string): UploadFile["type"] {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -56,21 +56,21 @@ function inferType(name: string): UploadFile["type"] {
   return "other";
 }
 
-function inferDocType(name: string) {
+function inferDocType(name: string): UploadFile["detectedDocType"] {
   const lower = name.toLowerCase();
-  if (lower.includes("inv") || lower.includes("invoice")) return detectedDemo.invoice;
-  if (lower.includes("pack") || lower.includes("pl")) return detectedDemo.packing;
-  if (lower.includes("bl") || lower.includes("bill")) return detectedDemo.bl;
-  if (lower.includes("awb")) return detectedDemo.awb;
-  return undefined;
+  if (lower.includes("inv")) return "invoice";
+  if (lower.includes("pack") || lower.match(/\bpl\b/)) return "packing_list";
+  if (lower.includes("bl") || lower.includes("bill")) return "bl";
+  if (lower.includes("awb")) return "awb";
+  return "invoice"; // sensible default
 }
 
 export default function UploadPage() {
+  const router = useRouter();
   const [files, setFiles] = React.useState<UploadFile[]>([]);
   const [isDragging, setIsDragging] = React.useState(false);
   const [autoAnalyze, setAutoAnalyze] = React.useState(true);
   const [supplier, setSupplier] = React.useState("");
-  const [shipment, setShipment] = React.useState("");
   const [incoterm, setIncoterm] = React.useState("CIF");
   const [currency, setCurrency] = React.useState("USD");
   const [origin, setOrigin] = React.useState("CN");
@@ -81,6 +81,7 @@ export default function UploadPage() {
     if (!list) return;
     const next: UploadFile[] = Array.from(list).map((f) => ({
       id: crypto.randomUUID(),
+      file: f,
       name: f.name,
       sizeKB: Math.round(f.size / 1024),
       type: inferType(f.name),
@@ -89,44 +90,75 @@ export default function UploadPage() {
       progress: 0,
     }));
     setFiles((prev) => [...next, ...prev]);
-    next.forEach((f) => simulate(f.id));
+    next.forEach(uploadFile);
   };
 
-  const simulate = (id: string) => {
-    setFiles((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, status: "uploading" } : p))
-    );
-    const upload = setInterval(() => {
-      setFiles((prev) =>
-        prev.map((p) => {
-          if (p.id !== id) return p;
-          const next = Math.min(100, p.progress + 18);
-          if (next >= 100) {
-            clearInterval(upload);
-            setTimeout(() => {
-              setFiles((cur) =>
-                cur.map((c) => (c.id === id ? { ...c, status: "analyzing", progress: 0 } : c))
-              );
-              const ai = setInterval(() => {
-                setFiles((cur) =>
-                  cur.map((c) => {
-                    if (c.id !== id) return c;
-                    const ap = Math.min(100, c.progress + 22);
-                    if (ap >= 100) {
-                      clearInterval(ai);
-                      return { ...c, status: "done", progress: 100 };
-                    }
-                    return { ...c, progress: ap };
-                  })
-                );
-              }, 400);
-            }, 300);
-            return { ...p, status: "uploaded", progress: 100 };
-          }
-          return { ...p, progress: next };
-        })
-      );
-    }, 250);
+  const update = (id: string, patch: Partial<UploadFile>) => {
+    setFiles((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  };
+
+  const uploadFile = async (f: UploadFile) => {
+    try {
+      update(f.id, { status: "uploading", progress: 5 });
+
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("ไม่ได้เข้าสู่ระบบ");
+
+      // Need org_id to build the path
+      const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("default_org_id")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const orgId = profile?.default_org_id;
+      if (!orgId) throw new Error("ไม่พบองค์กรของคุณ — โปรดเข้าสู่ระบบใหม่");
+
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, "0");
+      const ext = f.name.split(".").pop()?.toLowerCase() ?? "bin";
+      const path = `${orgId}/${yyyy}/${mm}/${f.id}.${ext}`;
+
+      update(f.id, { progress: 25 });
+
+      const { error: uploadError } = await supabase.storage
+        .from(DOC_BUCKET)
+        .upload(path, f.file, {
+          contentType: f.file.type || "application/octet-stream",
+          upsert: false,
+        });
+
+      if (uploadError) throw uploadError;
+
+      update(f.id, { status: "registering", progress: 75 });
+
+      const result = await registerUploadedDocument({
+        document_id: f.id,
+        storage_path: path,
+        file_name: f.name,
+        file_size: f.file.size,
+        mime: f.file.type || "application/octet-stream",
+        doc_type: f.detectedDocType ?? "invoice",
+        supplier_name: supplier || undefined,
+        origin_country: origin || undefined,
+        incoterm: incoterm || undefined,
+        currency: currency || undefined,
+        notes: notes || undefined,
+      });
+
+      if (!result.ok) throw new Error(result.message);
+
+      update(f.id, { status: "done", progress: 100 });
+    } catch (err) {
+      console.error(err);
+      update(f.id, {
+        status: "error",
+        progress: 0,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   };
 
   const clearDone = () =>
@@ -135,12 +167,14 @@ export default function UploadPage() {
   const queueStats = {
     total: files.length,
     done: files.filter((f) => f.status === "done").length,
-    processing: files.filter((f) => f.status === "uploading" || f.status === "analyzing").length,
+    processing: files.filter(
+      (f) => f.status === "uploading" || f.status === "registering"
+    ).length,
+    error: files.filter((f) => f.status === "error").length,
   };
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
-      {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-sm text-muted-foreground">
         <Link href="/dashboard" className="hover:text-foreground transition-colors">
           หน้าแรก
@@ -149,7 +183,6 @@ export default function UploadPage() {
         <span className="text-foreground">อัปโหลดเอกสาร</span>
       </nav>
 
-      {/* Header */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">อัปโหลดเอกสาร</h1>
@@ -158,14 +191,12 @@ export default function UploadPage() {
           </p>
         </div>
         <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
-          <Switch
-            checked={autoAnalyze}
-            onCheckedChange={setAutoAnalyze}
-            id="auto"
-          />
+          <Switch checked={autoAnalyze} onCheckedChange={setAutoAnalyze} id="auto" />
           <Label htmlFor="auto" className="cursor-pointer">
             <span className="text-sm">วิเคราะห์ HS Code อัตโนมัติ</span>
-            <p className="text-[11px] text-muted-foreground">ใช้ {files.length} เครดิต</p>
+            <p className="text-[11px] text-muted-foreground">
+              {queueStats.total > 0 ? `ใช้ ${queueStats.total} เครดิต` : "ใช้ 1 เครดิตต่อไฟล์"}
+            </p>
           </Label>
         </div>
       </div>
@@ -224,7 +255,7 @@ export default function UploadPage() {
                     <Badge variant="outline">Bill of Lading</Badge>
                     <Badge variant="outline">Airway Bill</Badge>
                   </div>
-                  <Button className="mt-5">
+                  <Button className="mt-5" type="button">
                     <UploadCloud className="h-4 w-4" />
                     เลือกไฟล์จากเครื่อง
                   </Button>
@@ -240,9 +271,9 @@ export default function UploadPage() {
                 <div>
                   <CardTitle>คิวการอัปโหลด</CardTitle>
                   <CardDescription>
-                    {queueStats.done}/{queueStats.total} เสร็จสมบูรณ์{" "}
-                    {queueStats.processing > 0 &&
-                      `· ${queueStats.processing} กำลังประมวลผล`}
+                    {queueStats.done}/{queueStats.total} เสร็จสมบูรณ์
+                    {queueStats.processing > 0 && ` · ${queueStats.processing} กำลังประมวลผล`}
+                    {queueStats.error > 0 && ` · ${queueStats.error} ผิดพลาด`}
                   </CardDescription>
                 </div>
                 {queueStats.done > 0 && (
@@ -259,6 +290,7 @@ export default function UploadPage() {
                     onRemove={() =>
                       setFiles((prev) => prev.filter((p) => p.id !== f.id))
                     }
+                    onView={() => router.push(`/analysis/${f.id}`)}
                   />
                 ))}
               </CardContent>
@@ -278,27 +310,12 @@ export default function UploadPage() {
             <CardContent className="space-y-3">
               <div className="space-y-1.5">
                 <Label htmlFor="supplier">Supplier</Label>
-                <Select
+                <Input
                   id="supplier"
+                  placeholder="เช่น Shenzhen Tech Co."
+                  className="h-9"
                   value={supplier}
                   onChange={(e) => setSupplier(e.target.value)}
-                  className="h-9 text-sm"
-                >
-                  <option value="">— เลือก supplier —</option>
-                  <option value="shenzhen">Shenzhen Tech Co., Ltd.</option>
-                  <option value="tokyo">Tokyo Precision K.K.</option>
-                  <option value="saigon">Saigon Garment JSC</option>
-                  <option value="new">+ เพิ่ม supplier ใหม่</option>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ship">Shipment / Container No.</Label>
-                <Input
-                  id="ship"
-                  placeholder="MAEU-2025-04122"
-                  className="h-9"
-                  value={shipment}
-                  onChange={(e) => setShipment(e.target.value)}
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -376,11 +393,7 @@ export default function UploadPage() {
                 </li>
                 <li className="flex gap-2">
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                  อัปโหลด Invoice และ Packing List ของ shipment เดียวกันพร้อมกัน
-                </li>
-                <li className="flex gap-2">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                  เลือก supplier ล่วงหน้า — AI จะอ้างอิงประวัติ HS Code ที่เคยใช้
+                  ตั้งค่า supplier + origin ก่อนอัปโหลด — AI จะใช้เป็น context
                 </li>
                 <li className="flex gap-2">
                   <AlertCircle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
@@ -398,23 +411,24 @@ export default function UploadPage() {
 function FileRow({
   file,
   onRemove,
+  onView,
 }: {
   file: UploadFile;
   onRemove: () => void;
+  onView: () => void;
 }) {
   const Icon = file.type === "image" ? ImageIcon : FileText;
 
   const statusLabel: Record<FileStatus, string> = {
     queued: "รอคิว",
     uploading: "กำลังอัปโหลด",
-    uploaded: "อัปโหลดเสร็จ",
-    analyzing: "AI กำลังวิเคราะห์",
-    done: "พร้อมตรวจสอบ",
+    registering: "กำลังบันทึก + เรียก AI",
+    done: "✓ พร้อมวิเคราะห์",
     error: "ผิดพลาด",
   };
 
   const showProgress =
-    file.status === "uploading" || file.status === "analyzing";
+    file.status === "uploading" || file.status === "registering";
 
   return (
     <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
@@ -426,7 +440,7 @@ function FileRow({
           <div className="flex items-center gap-2 min-w-0">
             <p className="truncate text-sm font-medium">{file.name}</p>
             {file.detectedDocType && (
-              <Badge variant="outline" className="shrink-0">
+              <Badge variant="outline" className="shrink-0 text-[10px]">
                 {file.detectedDocType}
               </Badge>
             )}
@@ -443,7 +457,7 @@ function FileRow({
                   ? "text-emerald-400"
                   : file.status === "error"
                   ? "text-rose-400"
-                  : file.status === "analyzing"
+                  : file.status === "registering"
                   ? "text-sky-400"
                   : "text-muted-foreground"
               )}
@@ -459,7 +473,7 @@ function FileRow({
               <div
                 className={cn(
                   "h-full rounded-full transition-all",
-                  file.status === "analyzing"
+                  file.status === "registering"
                     ? "bg-gradient-to-r from-sky-400 to-blue-500"
                     : "bg-gradient-to-r from-blue-400 to-blue-600"
                 )}
@@ -471,20 +485,23 @@ function FileRow({
             </span>
           </div>
         )}
+
+        {file.status === "error" && file.error && (
+          <p className="mt-1.5 text-xs text-rose-400">{file.error}</p>
+        )}
       </div>
       {file.status === "done" ? (
-        <Button variant="ghost" size="sm" asChild>
-          <Link href="/analysis/DOC-2025-04122">
-            <Sparkles className="h-3.5 w-3.5" />
-            ดูผล
-          </Link>
+        <Button variant="ghost" size="sm" onClick={onView}>
+          <Sparkles className="h-3.5 w-3.5" />
+          ดูผล
         </Button>
-      ) : file.status === "analyzing" || file.status === "uploading" ? (
+      ) : file.status === "uploading" || file.status === "registering" ? (
         <Loader2 className="h-4 w-4 animate-spin text-primary" />
       ) : (
         <button
           onClick={onRemove}
           className="text-muted-foreground hover:text-foreground"
+          aria-label="ลบไฟล์"
         >
           <X className="h-4 w-4" />
         </button>

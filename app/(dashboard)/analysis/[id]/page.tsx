@@ -1,72 +1,135 @@
-"use client";
-import * as React from "react";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import {
   ChevronRight,
   FileText,
   Sparkles,
-  Users,
   Package,
   TrendingUp,
   Eye,
-  History,
   RefreshCw,
+  AlertCircle,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { LineItemsList } from "@/components/dashboard/line-items-list";
-import { DutySummary } from "@/components/dashboard/duty-summary";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { cn } from "@/lib/utils";
+import { requireUser } from "@/lib/auth";
+import { getDocumentDetail, calcDutySummary } from "@/lib/queries/document-detail";
+import { DetailTabs } from "./detail-tabs";
+import { DutyPanel } from "./duty-panel";
+import { RetryButton } from "./retry-button";
+import { cn, formatTHB } from "@/lib/utils";
 
-const docMeta = [
-  { label: "เลขที่ Invoice", value: "INV-SHZ-2025-04122" },
-  { label: "วันที่เอกสาร", value: "18 พ.ค. 2568" },
-  { label: "Supplier", value: "Shenzhen Tech Co., Ltd." },
-  { label: "ประเทศต้นทาง", value: "🇨🇳 จีน (Shenzhen)" },
-  { label: "Incoterm", value: "CIF Bangkok" },
-  { label: "สกุลเงิน", value: "USD (1 USD = 36.0 THB)" },
-  { label: "วิธีขนส่ง", value: "Sea Freight · MAEU-2025-04122" },
-  { label: "พอร์ตปลายทาง", value: "Laem Chabang (THLCH)" },
-];
+export default async function AnalysisDetailPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  await requireUser(`/analysis/${params.id}`);
+  const doc = await getDocumentDetail(params.id);
 
-const stats = [
-  {
-    label: "จำนวนรายการ",
-    value: "4",
-    sub: "สินค้าใน Invoice",
-    icon: Package,
-    color: "text-sky-400",
-    bg: "from-sky-500/20 to-sky-500/5",
-  },
-  {
-    label: "ความมั่นใจ AI เฉลี่ย",
-    value: "87.3%",
-    sub: "2 รายการต่ำกว่าเกณฑ์",
-    icon: Sparkles,
-    color: "text-emerald-400",
-    bg: "from-emerald-500/20 to-emerald-500/5",
-  },
-  {
-    label: "มูลค่ารวม (THB)",
-    value: "฿649,260",
-    sub: "USD 18,035",
-    icon: TrendingUp,
-    color: "text-amber-400",
-    bg: "from-amber-500/20 to-amber-500/5",
-  },
-  {
-    label: "อากร + VAT",
-    value: "฿110,483",
-    sub: "17.0% ของมูลค่า CIF",
-    icon: Users,
-    color: "text-rose-400",
-    bg: "from-rose-500/20 to-rose-500/5",
-  },
-];
+  if (!doc) return notFound();
 
-export default function AnalysisPage() {
+  const duty = calcDutySummary(doc);
+  const itemCount = doc.items.length;
+  const avgConf =
+    itemCount > 0
+      ? doc.items.reduce((s, i) => s + (Number(i.hs_confidence) || 0), 0) / itemCount
+      : 0;
+  const lowConf = doc.items.filter(
+    (i) => Number(i.hs_confidence ?? 0) > 0 && Number(i.hs_confidence) < 0.9
+  ).length;
+
+  const statusBadge: Record<typeof doc.ocr_status, { label: string; variant: "info" | "success" | "warning" | "danger" }> = {
+    pending: { label: "รอประมวลผล", variant: "warning" },
+    processing: { label: "กำลังประมวลผล", variant: "info" },
+    done: { label: lowConf > 0 ? "รอตรวจสอบ" : "สำเร็จ", variant: lowConf > 0 ? "warning" : "success" },
+    failed: { label: "ผิดพลาด", variant: "danger" },
+  };
+
+  const docMeta = [
+    {
+      label: "เลขที่ Invoice",
+      value: doc.doc_number ?? "—",
+    },
+    {
+      label: "วันที่เอกสาร",
+      value: doc.issue_date
+        ? new Date(doc.issue_date).toLocaleDateString("th-TH", {
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          })
+        : "—",
+    },
+    {
+      label: "Supplier",
+      value: doc.supplier_name ?? "—",
+    },
+    {
+      label: "ประเทศต้นทาง",
+      value: doc.origin_country ?? "—",
+    },
+    {
+      label: "Incoterm",
+      value: doc.incoterm ?? "—",
+    },
+    {
+      label: "สกุลเงิน",
+      value: doc.currency ?? "USD",
+    },
+    {
+      label: "ประเภทเอกสาร",
+      value: doc.doc_type,
+    },
+    {
+      label: "อัปโหลดเมื่อ",
+      value: new Date(doc.created_at).toLocaleString("th-TH"),
+    },
+  ];
+
+  const stats = [
+    {
+      label: "จำนวนรายการ",
+      value: itemCount.toString(),
+      sub: itemCount > 0 ? "สินค้าใน Invoice" : "ยังไม่มี",
+      icon: Package,
+      color: "text-sky-400",
+      bg: "from-sky-500/20 to-sky-500/5",
+    },
+    {
+      label: "ความมั่นใจ AI เฉลี่ย",
+      value: avgConf > 0 ? `${(avgConf * 100).toFixed(1)}%` : "—",
+      sub:
+        lowConf > 0 ? `${lowConf} รายการต่ำกว่าเกณฑ์` : "ทุกรายการมั่นใจสูง",
+      icon: Sparkles,
+      color: "text-emerald-400",
+      bg: "from-emerald-500/20 to-emerald-500/5",
+    },
+    {
+      label: "มูลค่ารวม (THB)",
+      value: doc.ocr_status === "done" ? formatTHB(duty.cif_thb) : "—",
+      sub: doc.ocr_status === "done" ? `USD ${duty.fob_usd.toFixed(2)}` : "รอวิเคราะห์",
+      icon: TrendingUp,
+      color: "text-amber-400",
+      bg: "from-amber-500/20 to-amber-500/5",
+    },
+    {
+      label: "อากร + VAT",
+      value:
+        doc.ocr_status === "done" ? formatTHB(duty.grand_total_thb) : "—",
+      sub:
+        doc.ocr_status === "done"
+          ? `${((duty.grand_total_thb / Math.max(1, duty.cif_thb)) * 100).toFixed(1)}% ของ CIF`
+          : "—",
+      icon: AlertCircle,
+      color: "text-rose-400",
+      bg: "from-rose-500/20 to-rose-500/5",
+    },
+  ];
+
+  const cfg = statusBadge[doc.ocr_status];
+
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       {/* Breadcrumb */}
@@ -79,7 +142,9 @@ export default function AnalysisPage() {
           ประวัติภาษี & HS Code
         </Link>
         <ChevronRight className="h-3.5 w-3.5" />
-        <span className="text-foreground">INV-SHZ-2025-04122</span>
+        <span className="text-foreground truncate max-w-[200px]">
+          {doc.doc_number ?? doc.id.slice(0, 8)}
+        </span>
       </nav>
 
       {/* Header */}
@@ -89,31 +154,28 @@ export default function AnalysisPage() {
             <FileText className="h-6 w-6 text-blue-400" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-2xl font-bold tracking-tight">
-                INV-SHZ-2025-04122
+                {doc.doc_number ?? "(ไม่ระบุเลขเอกสาร)"}
               </h1>
-              <Badge variant="warning">รอตรวจสอบ</Badge>
+              <Badge variant={cfg.variant}>{cfg.label}</Badge>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
-              ผลการวิเคราะห์เอกสารโดย AI · ประมวลผลใน{" "}
-              <span className="text-foreground font-medium">8.2 วินาที</span> · GPT-4o
+              {doc.supplier_name ?? "Supplier ไม่ระบุ"} ·{" "}
+              {new Date(doc.created_at).toLocaleDateString("th-TH")}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
-            <History className="h-3.5 w-3.5" />
-            ประวัติการแก้ไข
-          </Button>
-          <Button variant="outline" size="sm">
-            <RefreshCw className="h-3.5 w-3.5" />
-            วิเคราะห์ใหม่
-          </Button>
-          <Button size="sm">
-            <Eye className="h-3.5 w-3.5" />
-            ดูเอกสารต้นฉบับ
-          </Button>
+          <RetryButton documentId={doc.id} status={doc.ocr_status} />
+          {doc.signed_file_url && (
+            <Button size="sm" asChild>
+              <a href={doc.signed_file_url} target="_blank" rel="noopener noreferrer">
+                <Eye className="h-3.5 w-3.5" />
+                ดูเอกสารต้นฉบับ
+              </a>
+            </Button>
+          )}
         </div>
       </div>
 
@@ -126,18 +188,16 @@ export default function AnalysisPage() {
               <CardContent className="flex items-center gap-4 p-5">
                 <div
                   className={cn(
-                    "flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br ring-1",
+                    "flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br ring-1 ring-current/20",
                     s.bg,
-                    "ring-current/20"
+                    s.color
                   )}
                 >
                   <Icon className={cn("h-5 w-5", s.color)} />
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">{s.label}</p>
-                  <p className="text-xl font-bold tabular-nums mt-0.5">
-                    {s.value}
-                  </p>
+                  <p className="text-xl font-bold tabular-nums mt-0.5">{s.value}</p>
                   <p className="text-[11px] text-muted-foreground">{s.sub}</p>
                 </div>
               </CardContent>
@@ -146,105 +206,22 @@ export default function AnalysisPage() {
         })}
       </div>
 
-      {/* Two column layout */}
+      {/* Two-column layout */}
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
-          <Tabs defaultValue="items">
-            <TabsList>
-              <TabsTrigger value="items">
-                <Package className="h-3.5 w-3.5 mr-1.5" />
-                รายการสินค้า
-              </TabsTrigger>
-              <TabsTrigger value="header">ข้อมูลส่วนหัว</TabsTrigger>
-              <TabsTrigger value="ai-log">บันทึก AI</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="items">
-              <LineItemsList />
-            </TabsContent>
-
-            <TabsContent value="header">
-              <Card>
-                <CardContent className="grid gap-4 p-6 sm:grid-cols-2">
-                  {docMeta.map((m) => (
-                    <div key={m.label}>
-                      <p className="text-xs uppercase tracking-wider text-muted-foreground">
-                        {m.label}
-                      </p>
-                      <p className="mt-1 text-sm font-medium">{m.value}</p>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="ai-log">
-              <Card>
-                <CardContent className="space-y-3 p-6">
-                  <LogEntry
-                    time="14:32:08"
-                    title="เริ่มต้น OCR เอกสาร"
-                    desc="อ่านไฟล์ Invoice_SHZ-2025-04122.pdf (842 KB) ด้วย GPT-4o vision"
-                  />
-                  <LogEntry
-                    time="14:32:11"
-                    title="สกัดข้อมูลส่วนหัวสำเร็จ"
-                    desc="พบ supplier, buyer, invoice no., date, incoterm, currency"
-                  />
-                  <LogEntry
-                    time="14:32:13"
-                    title="วิเคราะห์รายการสินค้า 4 รายการ"
-                    desc="ส่งคำอธิบายสินค้าผ่าน HS Code RAG (22,418 codes)"
-                  />
-                  <LogEntry
-                    time="14:32:16"
-                    title="แนะนำพิกัดและคำนวณภาษี"
-                    desc="ใช้ token รวม 8,420 (prompt 6,210 + completion 2,210)"
-                    success
-                  />
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
+          <DetailTabs doc={doc} docMeta={docMeta} />
         </div>
 
-        {/* Right: duty summary (sticky) */}
         <div className="lg:col-span-1">
-          <DutySummary />
+          <DutyPanel
+            data={{
+              ...duty,
+              item_count: itemCount,
+              low_conf_count: lowConf,
+              ready: doc.ocr_status === "done" && itemCount > 0,
+            }}
+          />
         </div>
-      </div>
-    </div>
-  );
-}
-
-function LogEntry({
-  time,
-  title,
-  desc,
-  success,
-}: {
-  time: string;
-  title: string;
-  desc: string;
-  success?: boolean;
-}) {
-  return (
-    <div className="flex gap-3 rounded-lg border border-border bg-secondary/30 p-3">
-      <div className="flex flex-col items-center">
-        <div
-          className={cn(
-            "h-2 w-2 rounded-full",
-            success ? "bg-emerald-400" : "bg-primary"
-          )}
-        />
-        <div className="w-px flex-1 bg-border mt-1" />
-      </div>
-      <div className="flex-1">
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-medium">{title}</p>
-          <span className="text-xs font-mono text-muted-foreground">{time}</span>
-        </div>
-        <p className="mt-0.5 text-xs text-muted-foreground">{desc}</p>
       </div>
     </div>
   );
