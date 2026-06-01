@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Lightbulb,
   AlertCircle,
+  ArrowRight,
 } from "lucide-react";
 import {
   Card,
@@ -173,6 +174,52 @@ export default function UploadPage() {
     error: files.filter((f) => f.status === "error").length,
   };
 
+  // Most recently completed file — drives the "ดูผล" CTA and auto-redirect.
+  const latestDone = React.useMemo(
+    () => files.find((f) => f.status === "done"),
+    [files]
+  );
+
+  // Auto-redirect to the analysis page after a single file finishes uploading.
+  // Skipped when multiple files are in the queue (the user is probably
+  // batch-uploading; let them stay on the page).
+  const [redirectCountdown, setRedirectCountdown] = React.useState<number | null>(null);
+  const [redirectCancelled, setRedirectCancelled] = React.useState(false);
+
+  React.useEffect(() => {
+    if (redirectCancelled) return;
+    // Auto-redirect when EXACTLY one file finished and nothing else is in flight.
+    const isSingleDone =
+      queueStats.done === 1 &&
+      queueStats.processing === 0 &&
+      queueStats.error === 0;
+    if (isSingleDone && latestDone && redirectCountdown === null) {
+      setRedirectCountdown(3);
+    }
+  }, [
+    queueStats.done,
+    queueStats.processing,
+    queueStats.error,
+    latestDone,
+    redirectCountdown,
+    redirectCancelled,
+  ]);
+
+  React.useEffect(() => {
+    if (redirectCountdown === null) return;
+    if (redirectCountdown <= 0) {
+      if (latestDone) router.push(`/analysis/${latestDone.id}`);
+      return;
+    }
+    const t = setTimeout(() => setRedirectCountdown((n) => (n == null ? null : n - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [redirectCountdown, latestDone, router]);
+
+  const cancelAutoRedirect = () => {
+    setRedirectCountdown(null);
+    setRedirectCancelled(true);
+  };
+
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       <nav className="flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -263,6 +310,62 @@ export default function UploadPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Success banner — appears when at least one upload finishes */}
+          {queueStats.done > 0 && latestDone && (
+            <Card className="overflow-hidden border-emerald-500/40 bg-gradient-to-br from-emerald-500/10 via-card to-card">
+              <CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500/20">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">
+                      อัปโหลดสำเร็จ {queueStats.done} ไฟล์ — AI กำลังวิเคราะห์
+                    </p>
+                    {redirectCountdown !== null ? (
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        กำลังพาไปดูผลใน{" "}
+                        <span className="font-semibold text-emerald-400 tabular-nums">
+                          {redirectCountdown}
+                        </span>{" "}
+                        วินาที — กดยกเลิกถ้าจะอัปโหลดเพิ่ม
+                      </p>
+                    ) : (
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        กดปุ่ม "ดูผล" เพื่อเปิดหน้าผลการวิเคราะห์
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {redirectCountdown !== null && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={cancelAutoRedirect}
+                    >
+                      ยกเลิก
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    onClick={() => router.push("/analysis")}
+                  >
+                    ดูทั้งหมด
+                  </Button>
+                  <Button
+                    size="lg"
+                    onClick={() => router.push(`/analysis/${latestDone.id}`)}
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    ดูผล
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Queue */}
           {files.length > 0 && (
@@ -491,9 +594,10 @@ function FileRow({
         )}
       </div>
       {file.status === "done" ? (
-        <Button variant="ghost" size="sm" onClick={onView}>
+        <Button size="sm" onClick={onView} className="shrink-0">
           <Sparkles className="h-3.5 w-3.5" />
           ดูผล
+          <ArrowRight className="h-3.5 w-3.5" />
         </Button>
       ) : file.status === "uploading" || file.status === "registering" ? (
         <Loader2 className="h-4 w-4 animate-spin text-primary" />
