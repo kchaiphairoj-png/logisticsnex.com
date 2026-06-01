@@ -1,8 +1,20 @@
 "use server";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { getSupabaseAdmin, DOC_BUCKET } from "@/lib/supabase-admin";
+
+/**
+ * Build a Cookie header string from the current request's cookies, so
+ * server-to-server fetch calls can pass middleware auth gating.
+ */
+function serializeCookieHeader(): string {
+  return cookies()
+    .getAll()
+    .map((c) => `${c.name}=${c.value}`)
+    .join("; ");
+}
 
 /**
  * Server Actions for document uploads.
@@ -92,16 +104,20 @@ export async function registerUploadedDocument(
 
   // Fire-and-forget AI extract — don't block the UI.
   // The route handler updates `documents.ocr_status` as it progresses.
-  // We use the service-role admin client so the call doesn't need a
-  // user session (which it already has via cookies anyway).
+  //
+  // We forward the current request's cookies so middleware.ts's auth gate
+  // (which protects /api/ai/*) recognizes us. Without this header the
+  // server-to-server fetch arrives without a session and gets redirected
+  // to /sign-in — silently — so the AI never runs and the document sits
+  // at ocr_status='pending' forever.
   if (process.env.NEXT_PUBLIC_APP_URL) {
     fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/ai/extract`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: serializeCookieHeader(),
+      },
       body: JSON.stringify({ document_id: parsed.data.document_id }),
-      // Don't keep the connection alive for the entire OCR call —
-      // we just want to kick it off. The Edge runtime will keep
-      // it running independently.
     }).catch(() => {
       // Errors here aren't fatal — the user can retry from /analysis/[id]
     });
@@ -146,7 +162,10 @@ export async function retriggerExtract(documentId: string): Promise<{ ok: boolea
   if (process.env.NEXT_PUBLIC_APP_URL) {
     fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/ai/extract`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: serializeCookieHeader(),
+      },
       body: JSON.stringify({ document_id: documentId }),
     }).catch(() => {});
   }
