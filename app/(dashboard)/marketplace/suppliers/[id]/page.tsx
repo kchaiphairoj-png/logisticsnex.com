@@ -43,6 +43,7 @@ import {
   getSupplierProducts,
   getSupplierReviews,
 } from "@/lib/queries/marketplace";
+import { ContactSupplierForm } from "./contact-supplier-form";
 import { cn } from "@/lib/utils";
 import { getInitials } from "@/lib/auth";
 
@@ -138,10 +139,6 @@ export default async function SupplierProfilePage({
               </div>
             </div>
             <div className="flex items-center gap-2 pb-1">
-              <Button variant="outline">
-                <MessageSquare className="h-4 w-4" />
-                ส่งข้อความ
-              </Button>
               <Button asChild>
                 <Link href={`/marketplace/rfq/new?supplier=${supplier.id}`}>
                   <Send className="h-4 w-4" />
@@ -200,6 +197,12 @@ export default async function SupplierProfilePage({
           </div>
         </div>
       </section>
+
+      {/* Contact Supplier — relay through LogisticsNex */}
+      <ContactSupplierForm
+        supplierId={supplier.id}
+        supplierName={supplier.trade_name}
+      />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-6">

@@ -429,6 +429,73 @@ export async function getQuotesForRfq(rfqId: string): Promise<QuoteRow[]> {
   });
 }
 
+/* ────────────────────────────────────────────────────────────
+ * Supplier Inquiries
+ * ──────────────────────────────────────────────────────────── */
+
+export interface InquiryListItem {
+  id: string;
+  supplier_id: string;
+  supplier_trade_name: string;
+  supplier_country: string;
+  supplier_country_flag: string;
+  subject: string;
+  message: string;
+  quantity: number | null;
+  quantity_unit: string;
+  target_price_usd: number | null;
+  needed_by_date: string | null;
+  status: "pending" | "in_review" | "forwarded" | "responded" | "closed";
+  admin_note: string | null;
+  supplier_response: string | null;
+  responded_at: string | null;
+  created_at: string;
+}
+
+export async function getInquiriesForOrg(
+  orgId: string | null
+): Promise<InquiryListItem[]> {
+  if (!orgId) return [];
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("supplier_inquiries")
+    .select(
+      `
+        id, supplier_id, subject, message, quantity, quantity_unit,
+        target_price_usd, needed_by_date, status, admin_note,
+        supplier_response, responded_at, created_at,
+        suppliers:supplier_id (trade_name, country)
+      `
+    )
+    .eq("buyer_org_id", orgId)
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (error || !data) return [];
+
+  return data.map((r: any) => {
+    const sup = Array.isArray(r.suppliers) ? r.suppliers[0] : r.suppliers;
+    return {
+      id: r.id,
+      supplier_id: r.supplier_id,
+      supplier_trade_name: sup?.trade_name ?? "—",
+      supplier_country: sup?.country ?? "",
+      supplier_country_flag: countryFlag(sup?.country ?? ""),
+      subject: r.subject,
+      message: r.message,
+      quantity: r.quantity,
+      quantity_unit: r.quantity_unit ?? "pcs",
+      target_price_usd: r.target_price_usd == null ? null : Number(r.target_price_usd),
+      needed_by_date: r.needed_by_date,
+      status: r.status,
+      admin_note: r.admin_note,
+      supplier_response: r.supplier_response,
+      responded_at: r.responded_at,
+      created_at: r.created_at,
+    };
+  });
+}
+
 export interface RfqListItem {
   id: string;
   title: string;
